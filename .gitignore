@@ -1,0 +1,109 @@
+# -----------------
+# Python basics
+# -----------------
+__pycache__/
+*.py[cod]
+*$py.class
+
+# -----------------
+# Virtual envs
+# -----------------
+.venv/
+.venv*/
+venv/
+env/
+.build-venv*/
+.conda/
+.python-version
+pip-wheel-metadata/
+
+# -----------------
+# Build / packaging
+# -----------------
+build/
+dist/
+.eggs/
+*.egg-info/
+wheelhouse/
+*.spec  # PyInstaller spec files (reproducible via CLI)
+
+# Native libs (generated during builds)
+*.so
+*.dll
+*.dylib
+*.manifest
+
+# -----------------
+# Logs / runtime junk
+# -----------------
+*.log
+logs/
+
+# -----------------
+# Tests / coverage
+# -----------------
+.tox/
+.nox/
+.pytest_cache/
+.hypothesis/
+.coverage
+.coverage.*
+htmlcov/
+
+# -----------------
+# Linters / type checkers
+# -----------------
+.mypy_cache/
+.pyre/
+.pytype/
+.ruff_cache/
+.pylint.d/
+
+# -----------------
+# Notebooks
+# -----------------
+.ipynb_checkpoints/
+*.ipynb
+
+# -----------------
+# Editors / IDEs
+# -----------------
+.vscode/
+.idea/
+*.iml
+*.sublime-*
+*.code-workspace
+
+# -----------------
+# OS cruft
+# -----------------
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+._*
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# -----------------
+# Docs
+# -----------------
+docs/_build/
+site/
+
+# -----------------
+# Release artifacts
+# -----------------
+*.zip
+*.tar.gz
+*.tgz
+*.dmg
+*.pkg
+
+# -----------------
+# Local config
+# -----------------
+.env
+.env.*
+*.local

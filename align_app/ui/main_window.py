@@ -17,7 +17,7 @@ from align_app.utils.img_io import SUPPORTED_LOWER, clamp
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Image Aligner — sidebar + toolbars")
+        self.setWindowTitle("MicroAlign")
         self.resize(1400, 900)
 
         splitter = QSplitter(Qt.Horizontal, self)

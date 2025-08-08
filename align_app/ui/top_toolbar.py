@@ -1,130 +1,151 @@
 from __future__ import annotations
 
-from PyQt5 import QtCore, QtWidgets  # pylint: disable=no-name-in-module
+from PyQt5 import QtCore, QtWidgets  # type: ignore
+
+from align_app.utils.img_io import clamp
 
 
 def _lbl(tb: QtWidgets.QToolBar, text: str) -> QtWidgets.QLabel:
-    lbl = QtWidgets.QLabel(text)
-    # Match toolbar button font size
-    lbl.setFont(tb.font())
-    return lbl
+    l = QtWidgets.QLabel(text)
+    l.setAlignment(QtCore.Qt.AlignVCenter | QtCore.Qt.AlignLeft)
+    l.setFont(tb.font())
+    return l
 
 
 def build_top_toolbar(mw) -> None:
-    """Construct the top toolbar on the given MainWindow instance."""
     tb = mw.toolbar_top
     tb.clear()
-    add = tb.addAction
+
     style = mw.style()
 
-    # ---- Sidebar toggle (collapsible)
-    act_sidebar = QtWidgets.QAction(
-        style.standardIcon(QtWidgets.QStyle.SP_DirOpenIcon), "Sidebar", mw
-    )
-    act_sidebar.setCheckable(True)
-    act_sidebar.setChecked(True)
-    act_sidebar.toggled.connect(mw._toggle_sidebar)
-    add(act_sidebar)
+    # ---- Navigation & Save group ----
+    nav_widget = QtWidgets.QWidget()
+    nav_layout = QtWidgets.QHBoxLayout(nav_widget)
+    nav_layout.setContentsMargins(0, 0, 0, 0)
+    nav_layout.setSpacing(4)
+
+    prev_btn = QtWidgets.QToolButton()
+    prev_btn.setText("Prev")
+    prev_btn.clicked.connect(lambda: mw.canvas.prev_image())
+    next_btn = QtWidgets.QToolButton()
+    next_btn.setText("Next")
+    next_btn.clicked.connect(lambda: mw.canvas.next_image())
+
+    save_btn = QtWidgets.QToolButton()
+    save_btn.setText("Save")
+    save_btn.clicked.connect(lambda: mw.canvas.save_current_aligned())
+    save_next_btn = QtWidgets.QToolButton()
+    save_next_btn.setText("Save+Next")
+
+    def _save_next():
+        mw.canvas.save_current_aligned()
+        mw.canvas.next_image()
+
+    save_next_btn.clicked.connect(_save_next)
+
+    for b in (prev_btn, next_btn, save_btn, save_next_btn):
+        b.setToolButtonStyle(QtCore.Qt.ToolButtonTextOnly)
+        nav_layout.addWidget(b)
+
+    tb.addWidget(nav_widget)
 
     tb.addSeparator()
 
-    # ---- Paths ----
-    act_base = QtWidgets.QAction("Base…", mw, triggered=mw._pick_base_image)
-    act_src = QtWidgets.QAction("Source Dir…", mw, triggered=mw._pick_src_dir)
-    act_align = QtWidgets.QAction("Align Out…", mw, triggered=mw._pick_align_out)
-    act_crop_dir = QtWidgets.QAction("Crops Out…", mw, triggered=mw._pick_crop_out)
-    act_reload = QtWidgets.QAction("Reload", mw, triggered=mw._reload_all)
-
-    for a in (act_base, act_src, act_align, act_crop_dir, act_reload):
-        add(a)
-
-    tb.addSeparator()
-    add(QtWidgets.QAction("Overlay", mw, triggered=mw.toggle_overlay))
-    add(QtWidgets.QAction("Outline", mw, triggered=mw.toggle_outline))
-
-    # ---- Collective view zoom (top-left anchored) ----
-    tb.addSeparator()
+    # ---- View Zoom + Hand Pan ----
     tb.addWidget(_lbl(tb, "View Zoom:"))
-
-    btn_minus = QtWidgets.QToolButton()
-    btn_minus.setText("−")
-    btn_minus.clicked.connect(lambda: mw._bump_view_zoom(-0.1))
-    tb.addWidget(btn_minus)
+    mw.view_zoom_minus = QtWidgets.QToolButton()
+    mw.view_zoom_minus.setText("−")
+    mw.view_zoom_minus.clicked.connect(lambda: _bump_view_zoom(mw, -0.1))
+    tb.addWidget(mw.view_zoom_minus)
 
     mw.zoom_slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
     mw.zoom_slider.setMinimum(25)  # 0.25x
     mw.zoom_slider.setMaximum(500)  # 5.0x
-    mw.zoom_slider.setValue(100)  # 1.0x
-    mw.zoom_slider.setFixedWidth(180)
-    mw.zoom_slider.valueChanged.connect(mw._on_zoom_slider)
+    mw.zoom_slider.setValue(int(round(mw.canvas.view_zoom * 100)))
+    mw.zoom_slider.setFixedWidth(200)
+    mw.zoom_slider.valueChanged.connect(lambda v: _on_zoom_slider(mw, v))
     tb.addWidget(mw.zoom_slider)
 
-    btn_plus = QtWidgets.QToolButton()
-    btn_plus.setText("+")
-    btn_plus.clicked.connect(lambda: mw._bump_view_zoom(+0.1))
-    tb.addWidget(btn_plus)
+    mw.view_zoom_plus = QtWidgets.QToolButton()
+    mw.view_zoom_plus.setText("+")
+    mw.view_zoom_plus.clicked.connect(lambda: _bump_view_zoom(mw, +0.1))
+    tb.addWidget(mw.view_zoom_plus)
 
-    btn_reset = QtWidgets.QToolButton()
-    btn_reset.setText("Reset")
-    btn_reset.clicked.connect(mw._reset_view_zoom)
-    tb.addWidget(btn_reset)
+    mw.view_zoom_reset = QtWidgets.QToolButton()
+    mw.view_zoom_reset.setText("Reset")
+    mw.view_zoom_reset.clicked.connect(lambda: _reset_view_zoom(mw))
+    tb.addWidget(mw.view_zoom_reset)
 
-    # Hand (pan) toggle – pans BOTH panels when zoomed
-    mw.act_hand = QtWidgets.QAction("🖐", mw, checkable=True)
-    mw.act_hand.setToolTip("Pan view")
-    mw.act_hand.toggled.connect(mw._toggle_hand_pan)
-    tb.addAction(mw.act_hand)
+    mw.hand_pan_btn = QtWidgets.QToolButton()
+    mw.hand_pan_btn.setCheckable(True)
+    mw.hand_pan_btn.setText("Pan")
+    mw.hand_pan_btn.setToolButtonStyle(QtCore.Qt.ToolButtonTextOnly)
+    mw.hand_pan_btn.toggled.connect(lambda v: mw.canvas.set_pan_mode(bool(v)))
+    tb.addWidget(mw.hand_pan_btn)
 
-    # ---- Alpha (overlay blend) ----
     tb.addSeparator()
-    tb.addWidget(_lbl(tb, "Alpha:"))
-    mw.alpha_slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
-    mw.alpha_slider.setMinimum(0)
-    mw.alpha_slider.setMaximum(100)
-    mw.alpha_slider.setValue(int(round(mw.canvas.alpha * 100)))
-    mw.alpha_slider.setFixedWidth(120)
-    mw.alpha_slider.valueChanged.connect(
-        lambda v: (setattr(mw.canvas, "alpha", v / 100.0), mw.canvas.update())
-    )
-    tb.addWidget(mw.alpha_slider)
 
-    # ---- Navigation group (Prev/Next/Save/Save+Next) ----
+    # ---- Undo / Redo / Reset current image / Reset view ----
+    undo_btn = QtWidgets.QToolButton()
+    undo_btn.setIcon(style.standardIcon(QtWidgets.QStyle.SP_ArrowBack))
+    undo_btn.setText("Undo")
+    undo_btn.setToolButtonStyle(QtCore.Qt.ToolButtonTextBesideIcon)
+    undo_btn.clicked.connect(mw.canvas.undo)
+
+    redo_btn = QtWidgets.QToolButton()
+    redo_btn.setIcon(style.standardIcon(QtWidgets.QStyle.SP_ArrowForward))
+    redo_btn.setText("Redo")
+    redo_btn.setToolButtonStyle(QtCore.Qt.ToolButtonTextBesideIcon)
+    redo_btn.clicked.connect(mw.canvas.redo)
+
+    reset_btn = QtWidgets.QToolButton()
+    reset_btn.setText("Reset Image")
+    reset_btn.clicked.connect(mw.canvas.reset_current)
+
+    reset_view_btn = QtWidgets.QToolButton()
+    reset_view_btn.setText("Reset View")
+    reset_view_btn.clicked.connect(lambda: _reset_view_zoom(mw))
+
+    for w in (undo_btn, redo_btn, reset_btn, reset_view_btn):
+        tb.addWidget(w)
+
     tb.addSeparator()
-    tb.addWidget(_lbl(tb, "Navigate:"))
-    add(QtWidgets.QAction("Prev", mw, triggered=lambda: mw.canvas.prev_image()))
-    add(QtWidgets.QAction("Next", mw, triggered=lambda: mw.canvas.next_image()))
-    add(
-        QtWidgets.QAction(
-            "Save", mw, triggered=lambda: mw.canvas.save_current_aligned()
-        )
-    )
-    add(
-        QtWidgets.QAction(
-            "Save+Next",
-            mw,
-            triggered=lambda: (
-                mw.canvas.save_current_aligned(),
-                mw.canvas.next_image(),
-            ),
-        )
-    )
 
-    # ---- Undo / Redo / Reset current image ----
-    tb.addSeparator()
-    act_undo = QtWidgets.QAction(
-        style.standardIcon(QtWidgets.QStyle.SP_ArrowBack), "Undo", mw
-    )
-    act_undo.triggered.connect(mw.canvas.undo)
-    tb.addAction(act_undo)
+    # ---- Sidebar toggle (<< / >>) ----
+    mw.side_btn = QtWidgets.QToolButton()
+    mw.side_btn.setCheckable(True)
+    mw.side_btn.setChecked(True)
+    mw.side_btn.setText("<<")
+    mw.side_btn.setToolTip("Hide sidebar")
 
-    act_redo = QtWidgets.QAction(
-        style.standardIcon(QtWidgets.QStyle.SP_ArrowForward), "Redo", mw
-    )
-    act_redo.triggered.connect(mw.canvas.redo)
-    tb.addAction(act_redo)
+    def _toggle_side(v: bool) -> None:
+        mw._toggle_sidebar(bool(v))
+        mw.side_btn.setText("<<" if v else ">>")
+        mw.side_btn.setToolTip("Hide sidebar" if v else "Show sidebar")
 
-    act_reset = QtWidgets.QAction(
-        style.standardIcon(QtWidgets.QStyle.SP_BrowserReload), "Reset Image", mw
-    )
-    act_reset.triggered.connect(mw.canvas.reset_current)
-    tb.addAction(act_reset)
+    mw.side_btn.toggled.connect(_toggle_side)
+    tb.addWidget(mw.side_btn)
+
+
+def _on_zoom_slider(mw, value: int) -> None:
+    mw.canvas.view_zoom = value / 100.0
+    mw.canvas.update()
+
+
+def _bump_view_zoom(mw, delta: float) -> None:
+    v = clamp(mw.canvas.view_zoom + delta, 0.25, 5.0)
+    mw.zoom_slider.blockSignals(True)
+    mw.zoom_slider.setValue(int(round(v * 100)))
+    mw.zoom_slider.blockSignals(False)
+    mw.canvas.view_zoom = v
+    mw.canvas.update()
+
+
+def _reset_view_zoom(mw) -> None:
+    mw.zoom_slider.blockSignals(True)
+    mw.zoom_slider.setValue(100)
+    mw.zoom_slider.blockSignals(False)
+    mw.canvas.view_zoom = 1.0
+    mw.canvas.view_pan_xp = 0.0
+    mw.canvas.view_pan_yp = 0.0
+    mw.canvas.update()

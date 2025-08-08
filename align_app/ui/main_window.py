@@ -1,52 +1,36 @@
-"""Main window: path + nav on row 1, context selector on row 2.
-
-Row 1 (Top): Sidebar toggle + Paths + Overlay/Outline + Collective View Zoom (− / slider / + / reset / Hand)
-             + Alpha + Navigation (Prev / Next / Save / Save+Next) + Undo / Redo / Reset
-
-Row 2 (Context bar): Context selector (exclusive) + ONLY that group's controls:
-  - Move: arrow buttons (uses canvas.step)
-  - Rotate: Rot− / Rot+
-  - Zoom: Zoom− / Zoom+ / µZoom− / µZoom+
-  - Perspective: "Corners:" + corner icons (┌ ┐ ┘ └) + arrow nudge (uses canvas.persp_step)
-  - Grid: "Show Grid" + Step slider + live value
-  - Crop: "Crop Source:" + radio [Source, Aligned] + Start
-
-Status bar: left empty (kept only for the progress bar on the right).
-"""
+"""Main window: menu bar, two toolbars (rows), sidebar, status bar + progress, project integration."""
 
 from __future__ import annotations
 
 from pathlib import Path
 from typing import Optional
 
-from PyQt5 import QtCore, QtWidgets  # pylint: disable=no-name-in-module
+from PyQt5 import QtCore, QtWidgets  # type: ignore
 
-from align_app.ui.align_canvas import AlignCanvas
-from align_app.utils.img_io import SUPPORTED_LOWER, clamp
-from .sidebar import build_sidebar, highlight_current_in_sidebar
-from .watchers import rebuild_watchers
-from .top_toolbar import build_top_toolbar
-from .context_toolbar import build_context_toolbar
+from align_app.ui.canvas_widget import CanvasWidget
+from align_app.ui.sidebar import build_sidebar, highlight_current_in_sidebar
+from align_app.ui.watchers import rebuild_watchers
+from align_app.ui.top_toolbar import build_top_toolbar
+from align_app.ui.context_toolbar import build_context_toolbar
+from align_app.project import ProjectManager, ProjectInfo
 
 
 class MainWindow(QtWidgets.QMainWindow):
-    """Main application window wiring canvas and toolbars."""
+    """Main application window wiring canvas, toolbars, sidebar, and project manager."""
 
     def __init__(self):
         super().__init__()
         self.setWindowTitle("MicroAlign")
         self.resize(1400, 900)
 
-        self.splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal, self)
-        self.setCentralWidget(self.splitter)
+        splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal, self)
+        self.setCentralWidget(splitter)
 
-        # Left: compact sidebar (collapsible)
+        # Left: collapsible sidebar
         self.sidebar = QtWidgets.QTreeWidget()
         self.sidebar.setHeaderHidden(True)
-        self.sidebar.setMinimumWidth(220)
-        self._sidebar_last_w = 320
-        self.splitter.addWidget(self.sidebar)
-        self.splitter.splitterMoved.connect(self._on_splitter_moved)
+        self.sidebar.setMinimumWidth(320)
+        splitter.addWidget(self.sidebar)
 
         # Right: toolbars + canvas (two rows)
         right = QtWidgets.QWidget()
@@ -54,29 +38,41 @@ class MainWindow(QtWidgets.QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
 
         self.toolbar_top = QtWidgets.QToolBar("Top")
-        self.toolbar_ctx = QtWidgets.QToolBar("Context")
-        for tb in (self.toolbar_top, self.toolbar_ctx):
+        self.toolbar_bottom = QtWidgets.QToolBar("Bottom")
+        for tb in (self.toolbar_top, self.toolbar_bottom):
             tb.setIconSize(QtCore.QSize(20, 20))
 
         layout.addWidget(self.toolbar_top)
-        layout.addWidget(self.toolbar_ctx)
+        layout.addWidget(self.toolbar_bottom)
 
-        self.canvas = AlignCanvas()
+        self.canvas = CanvasWidget()
         layout.addWidget(self.canvas, 1)
 
-        self.splitter.addWidget(right)
-        self.splitter.setSizes([350, 1050])
+        splitter.addWidget(right)
+        splitter.setSizes([350, 1050])
 
-        # Build toolbars (helpers)
+        # Project manager
+        self.project = ProjectManager(self)
+        self.project.changed.connect(self._on_project_changed)
+
+        # Build menu + toolbars
+        self._build_menus()
         build_top_toolbar(self)
         build_context_toolbar(self)
 
         # Sidebar interactions
         self.sidebar.itemDoubleClicked.connect(self._sidebar_double_clicked)
 
-        # Status bar + progress (no text label)
+        # Status bar + project path (left) + progress (right)
         self.status = QtWidgets.QStatusBar()
         self.setStatusBar(self.status)
+
+        self.project_label = QtWidgets.QLabel("No project")
+        self.project_label.setTextInteractionFlags(
+            QtCore.Qt.TextSelectableByMouse | QtCore.Qt.TextSelectableByKeyboard
+        )
+        self.status.addWidget(self.project_label, 1)
+
         self.progress = QtWidgets.QProgressBar()
         self.progress.setVisible(False)
         self.progress.setFixedWidth(220)
@@ -95,227 +91,138 @@ class MainWindow(QtWidgets.QMainWindow):
             lambda _p: highlight_current_in_sidebar(self.sidebar, self.canvas)
         )
         self.canvas.cropProgress.connect(self._on_crop_progress)
-        self.canvas.modeChanged.connect(self._on_canvas_mode_changed)
-        self.canvas.activeCornerChanged.connect(self._sync_corner_buttons)
 
         # Initial sidebar + watchers
         build_sidebar(self.sidebar, self.canvas)
         rebuild_watchers(self.watcher, self.canvas)
         highlight_current_in_sidebar(self.sidebar, self.canvas)
 
-    # ---------- sidebar collapse ----------
+        # Welcome splash on first run
+        QtCore.QTimer.singleShot(200, self._welcome_startup)
 
-    def _toggle_sidebar(self, checked: bool) -> None:
-        # show/hide and adjust splitter sizes
-        if checked:
-            self.sidebar.setVisible(True)
-            total = max(1, self.splitter.width())
-            left = max(180, self._sidebar_last_w)
-            self.splitter.setSizes([left, total - left])
-        else:
-            self._sidebar_last_w = self.sidebar.width()
-            self.sidebar.setVisible(False)
-            total = max(1, self.splitter.width())
-            self.splitter.setSizes([0, total])
+    # ---------- Menus ----------
 
-    def _on_splitter_moved(self, _pos: int, _index: int) -> None:
-        if self.sidebar.isVisible():
-            self._sidebar_last_w = self.sidebar.width()
+    def _build_menus(self) -> None:
+        mbar = self.menuBar()
 
-    # ---------- top toolbar handlers ----------
-
-    def toggle_overlay(self) -> None:
-        self.canvas.overlay_mode = not self.canvas.overlay_mode
-        self.canvas.update()
-
-    def toggle_outline(self) -> None:
-        self.canvas.show_outline = not self.canvas.show_outline
-        self.canvas.update()
-
-    def _on_zoom_slider(self, value: int) -> None:
-        """Slider handler: set collective view zoom (top-left anchored)."""
-        self.canvas.view_zoom = value / 100.0
-        self.canvas.update()
-
-    def _bump_view_zoom(self, delta: float) -> None:
-        """Minus/Plus buttons: nudge collective view zoom and sync slider."""
-        v = clamp(self.canvas.view_zoom + delta, 0.25, 5.0)
-        if hasattr(self, "zoom_slider"):
-            self.zoom_slider.blockSignals(True)
-            self.zoom_slider.setValue(int(round(v * 100)))
-            self.zoom_slider.blockSignals(False)
-        self.canvas.view_zoom = v
-        self.canvas.update()
-
-    def _reset_view_zoom(self) -> None:
-        if hasattr(self, "zoom_slider"):
-            self.zoom_slider.blockSignals(True)
-            self.zoom_slider.setValue(100)
-            self.zoom_slider.blockSignals(False)
-        self.canvas.view_zoom = 1.0
-        self.canvas.update()
-
-    def _toggle_hand_pan(self, checked: bool) -> None:
-        """Toggle the Hand (pan) tool for panning both panels."""
-        self.canvas.set_pan_mode(bool(checked))
-
-    # ---------- context switching + UI (row 2) ----------
-
-    def _set_context(self, name: str) -> None:
-        if name == getattr(self, "active_context", None):
-            return
-        self.active_context = name
-        # Toggle perspective mode according to context (preserve image state)
-        self.canvas.set_perspective_mode(name == "perspective")
-        # Update selector checks & show/hide groups
-        for n, act in getattr(self, "ctx_actions", {}).items():
-            act.setChecked(n == name)
-        self._refresh_context_ui()
-        self._refresh_context_value_label()
-
-    def _refresh_context_ui(self) -> None:
-        """Hide all group actions, show only the selected group's controls."""
-        show_map = {
-            "move": getattr(self, "ctrl_move", []),
-            "rotate": getattr(self, "ctrl_rotate", []),
-            "zoom": getattr(self, "ctrl_zoom", []),
-            "perspective": getattr(self, "ctrl_persp", []),
-            "grid": getattr(self, "ctrl_grid", []),
-            "crop": getattr(self, "ctrl_crop", []),
-        }
-        all_groups = []
-        for k in show_map.values():
-            all_groups += k
-        for a in all_groups:
-            a.setVisible(False)
-        for a in show_map.get(self.active_context, []):
-            a.setVisible(True)
-
-    def _refresh_context_value_label(self) -> None:
-        # Right-edge value: keep minimal (no footer status text anymore)
-        c = getattr(self, "active_context", "")
-        if c == "grid":
-            txt = f"Grid: {'On' if self.canvas.grid_on else 'Off'}   Step: {int(self.canvas.grid_step)}"
-        elif c == "crop":
-            choice = (
-                "Aligned"
-                if (
-                    hasattr(self, "crop_radio_aligned")
-                    and self.crop_radio_aligned.isChecked()
-                )
-                else "Source"
-            )
-            txt = f"Crop Source: {choice}"
-        elif c == "perspective":
-            txt = f"Corner: {self.canvas.active_corner+1}"
-        else:
-            txt = ""
-        if hasattr(self, "ctx_value_label"):
-            self.ctx_value_label.setText(txt)
-
-    def _toggle_grid_checked(self, state: bool) -> None:
-        self.canvas.grid_on = bool(state)
-        self.canvas.update()
-        self._refresh_context_value_label()
-
-    def _on_grid_step_change(self, value: int) -> None:
-        self.canvas.grid_step = int(value)
-        if hasattr(self, "grid_step_value"):
-            self.grid_step_value.setText(str(int(value)))
-        self.canvas.update()
-        self._refresh_context_value_label()
-
-    def _start_crop_clicked(self) -> None:
-        use_aligned = False
-        if hasattr(self, "crop_radio_aligned") and self.crop_radio_aligned.isChecked():
-            use_aligned = True
-        self.canvas.start_crop_mode(use_aligned)
-        self._refresh_context_value_label()
-
-    def _set_active_corner(self, idx: int) -> None:
-        self.canvas.set_active_corner(idx)
-        self._sync_corner_buttons(idx)
-
-    # ---------- sync from canvas signals ----------
-
-    def _on_canvas_mode_changed(self, is_persp: bool) -> None:
-        # If user hit 'P', switch context accordingly without changing image state.
-        if is_persp:
-            self._set_context("perspective")
-        elif getattr(self, "active_context", "") == "perspective":
-            self._set_context("move")
-
-    def _sync_corner_buttons(self, idx: int) -> None:
-        if hasattr(self, "corner_actions"):
-            for i, act in enumerate(self.corner_actions):
-                act.setChecked(i == idx)
-        self._refresh_context_value_label()
-
-    # ---------- pickers ----------
-
-    def _pick_base_image(self) -> None:
-        fn, _ = QtWidgets.QFileDialog.getOpenFileName(
+        # File menu
+        m_file = mbar.addMenu("&File")
+        act_new = QtWidgets.QAction(
+            "New Project…",
             self,
-            "Choose Base Image",
-            str(Path.home()),
-            "Images (*.png *.jpg *.jpeg *.jpe)",
+            triggered=lambda: self.project.new_project_wizard(self),
         )
-        if fn:
-            self.canvas.set_paths(
-                base_path=Path(fn), src_dir=None, align_out=None, crop_out=None
-            )
-            build_sidebar(self.sidebar, self.canvas)
-            rebuild_watchers(self.watcher, self.canvas)
-            highlight_current_in_sidebar(self.sidebar, self.canvas)
+        act_open = QtWidgets.QAction(
+            "Open Project…", self, triggered=lambda: self.project.open_project(self)
+        )
+        act_save = QtWidgets.QAction(
+            "Save Project", self, triggered=lambda: self.project.save_project(self)
+        )
+        act_save_as = QtWidgets.QAction(
+            "Save Project As…",
+            self,
+            triggered=lambda: self.project.save_project_as(self),
+        )
+        act_close = QtWidgets.QAction(
+            "Close Project", self, triggered=lambda: self.project.close_project()
+        )
+        act_quit = QtWidgets.QAction(
+            "Quit", self, triggered=lambda: QtWidgets.qApp.quit()
+        )
+        for a in (act_new, act_open, act_save, act_save_as, act_close):
+            m_file.addAction(a)
+        m_file.addSeparator()
+        m_file.addAction(act_quit)
 
-    def _pick_src_dir(self) -> None:
-        d = QtWidgets.QFileDialog.getExistingDirectory(
-            self, "Choose Source Directory", str(Path.home())
-        )
-        if d:
-            self.canvas.set_paths(
-                base_path=None, src_dir=Path(d), align_out=None, crop_out=None
-            )
-            build_sidebar(self.sidebar, self.canvas)
-            rebuild_watchers(self.watcher, self.canvas)
-            highlight_current_in_sidebar(self.sidebar, self.canvas)
+        # Help menu
+        m_help = mbar.addMenu("&Help")
+        m_help.addAction(QtWidgets.QAction("About", self, triggered=self._about))
 
-    def _pick_align_out(self) -> None:
-        d = QtWidgets.QFileDialog.getExistingDirectory(
-            self, "Choose Align Out Directory", str(Path.home())
+    def _about(self) -> None:
+        QtWidgets.QMessageBox.information(
+            self, "About", "MicroAlign – simple manual alignment utility."
         )
-        if d:
-            self.canvas.set_paths(
-                base_path=None, src_dir=None, align_out=Path(d), crop_out=None
-            )
-            build_sidebar(self.sidebar, self.canvas)
-            rebuild_watchers(self.watcher, self.canvas)
-            highlight_current_in_sidebar(self.sidebar, self.canvas)
 
-    def _pick_crop_out(self) -> None:
-        d = QtWidgets.QFileDialog.getExistingDirectory(
-            self, "Choose Crops Out Directory", str(Path.home())
-        )
-        if d:
-            self.canvas.set_paths(
-                base_path=None, src_dir=None, align_out=None, crop_out=Path(d)
-            )
-            build_sidebar(self.sidebar, self.canvas)
-            rebuild_watchers(self.watcher, self.canvas)
-            highlight_current_in_sidebar(self.sidebar, self.canvas)
+    # ---------- welcome ----------
 
-    def _reload_all(self) -> None:
-        self.canvas.set_paths(
-            self.canvas.base_path,
-            self.canvas.src_dir,
-            self.canvas.align_out,
-            self.canvas.crop_out,
+    def _welcome_startup(self) -> None:
+        # Only show if no project loaded
+        if self.project.info:
+            return
+        recents = self.project.recent_projects()
+        if not recents:
+            # No recent projects: directly open new wizard
+            self.project.new_project_wizard(self)
+            return
+
+        dlg = QtWidgets.QDialog(self)
+        dlg.setWindowTitle("Welcome to MicroAlign")
+        lay = QtWidgets.QVBoxLayout(dlg)
+        lbl = QtWidgets.QLabel("Open a recent project or start a new one:")
+        lay.addWidget(lbl)
+
+        listw = QtWidgets.QListWidget()
+        for r in recents:
+            listw.addItem(r)
+        lay.addWidget(listw)
+
+        btns = QtWidgets.QDialogButtonBox()
+        btn_open_sel = btns.addButton(
+            "Open Selected", QtWidgets.QDialogButtonBox.AcceptRole
         )
-        build_sidebar(self.sidebar, self.canvas)
-        rebuild_watchers(self.watcher, self.canvas)
-        highlight_current_in_sidebar(self.sidebar, self.canvas)
+        btn_browse = btns.addButton("Browse…", QtWidgets.QDialogButtonBox.ActionRole)
+        btn_new = btns.addButton("New Project", QtWidgets.QDialogButtonBox.ActionRole)
+        btn_cancel = btns.addButton("Cancel", QtWidgets.QDialogButtonBox.RejectRole)
+        lay.addWidget(btns)
+
+        def open_recent_item(item: QtWidgets.QListWidgetItem) -> None:
+            root = Path(item.text())
+            manifest = root / "project.json"
+            if manifest.exists():
+                info = ProjectInfo.from_json(manifest)
+                self.project.info = info
+                self.project.remember_project(root)
+                self.project.changed.emit(info)
+                dlg.accept()
+
+        listw.itemDoubleClicked.connect(open_recent_item)
+        listw.itemActivated.connect(open_recent_item)
+
+        def _do_open_selected():
+            item = listw.currentItem()
+            if not item:
+                QtWidgets.QMessageBox.information(
+                    dlg,
+                    "Select a project",
+                    "Please pick a recent project from the list.",
+                )
+                return
+            open_recent_item(item)
+
+        def _do_browse():
+            dlg.accept()
+            self.project.open_project(self)
+
+        def _do_new():
+            dlg.accept()
+            self.project.new_project_wizard(self)
+
+        btn_open_sel.clicked.connect(_do_open_selected)
+        btn_browse.clicked.connect(_do_browse)
+        btn_new.clicked.connect(_do_new)
+        btn_cancel.clicked.connect(dlg.reject)
+
+        dlg.exec_()
 
     # ---------- sidebar ----------
+
+    def _toggle_sidebar(self, visible: bool) -> None:
+        self.sidebar.setVisible(bool(visible))
+        # resize splitter to give/take space
+        if visible:
+            self.centralWidget().setSizes([350, self.width() - 350])
+        else:
+            self.centralWidget().setSizes([0, self.width()])
 
     def _sidebar_double_clicked(
         self, item: QtWidgets.QTreeWidgetItem, _col: int
@@ -324,7 +231,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if not path:
             return
         p = Path(path)
-        if p.is_file() and p.suffix.lower() in SUPPORTED_LOWER:
+        if p.is_file():
             if self.canvas.files:
                 try:
                     idx = self.canvas.files.index(p)
@@ -335,12 +242,34 @@ class MainWindow(QtWidgets.QMainWindow):
                     self.canvas.update()
                     highlight_current_in_sidebar(self.sidebar, self.canvas)
         elif p.is_dir():
+            # Replace Source to clicked folder inside current project
             self.canvas.set_paths(
                 base_path=None, src_dir=p, align_out=None, crop_out=None
             )
             build_sidebar(self.sidebar, self.canvas)
             rebuild_watchers(self.watcher, self.canvas)
             highlight_current_in_sidebar(self.sidebar, self.canvas)
+
+    # ---------- project state changed ----------
+
+    def _on_project_changed(self, info: Optional[ProjectInfo]) -> None:
+        if info is None:
+            # clear canvas
+            self.canvas.set_paths(None, None, None, None)
+            self.project_label.setText("No project")
+            build_sidebar(self.sidebar, self.canvas)
+            rebuild_watchers(self.watcher, self.canvas)
+            highlight_current_in_sidebar(self.sidebar, self.canvas)
+            return
+
+        # Set canvas paths from project
+        self.canvas.set_paths(
+            info.base_image, info.source_dir, info.align_dir, info.crops_dir
+        )
+        self.project_label.setText(str(info.root))
+        build_sidebar(self.sidebar, self.canvas)
+        rebuild_watchers(self.watcher, self.canvas)
+        highlight_current_in_sidebar(self.sidebar, self.canvas)
 
     # ---------- filesystem watching ----------
 

@@ -21,7 +21,7 @@ on:
         required: false
 
 permissions:
-  contents: write   # create tags + releases
+  contents: write   # create tags & releases
   actions: read     # download artifacts from another run
 
 jobs:
@@ -33,39 +33,38 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Resolve the build run to use
+      - name: Resolve the Build run to use (via REST)
         id: resolve
         env:
           GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
         run: |
           if [ -n "${{ inputs.run_id }}" ]; then
-            echo "Using provided run_id=${{ inputs.run_id }}"
             echo "run_id=${{ inputs.run_id }}" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
           BRANCH="${{ inputs.branch }}"
-          echo "Searching for a successful 'Build MicroAlign' run on branch: $BRANCH that has artifacts..."
+          echo "Searching for a successful 'Build MicroAlign' run on branch: $BRANCH with artifacts..."
 
-          # Get the last 15 successful runs for the workflow on the branch
-          mapfile -t RUNS < <(gh run list \
-            --workflow "Build MicroAlign" \
-            --branch "$BRANCH" \
-            --status success \
-            -L 15 \
-            --json databaseId \
-            -q '.[].databaseId')
-
-          if [ ${#RUNS[@]} -eq 0 ]; then
-            echo "No successful runs found for 'Build MicroAlign' on branch $BRANCH"
+          # Grab the workflow id for 'Build MicroAlign'
+          WF_ID=$(gh api repos/$REPO/actions/workflows \
+            -q '.workflows[] | select(.name=="Build MicroAlign") | .id')
+          if [ -z "$WF_ID" ]; then
+            echo "Could not find a workflow named 'Build MicroAlign'."
             exit 1
           fi
 
-          # Pick the newest run that actually has artifacts
+          # List last 20 successful runs on that branch (newest first)
+          RUNS_JSON=$(gh api repos/$REPO/actions/workflows/$WF_ID/runs \
+            -F branch="$BRANCH" -F status=success -F per_page=20)
+          RUN_IDS=$(echo "$RUNS_JSON" | jq -r '.workflow_runs[].id')
+
           CHOSEN=""
-          for RID in "${RUNS[@]}"; do
-            COUNT=$(gh run view "$RID" --json artifacts -q '.artifacts | length')
-            echo "Run $RID has $COUNT artifact(s)"
+          for RID in $RUN_IDS; do
+            # Check artifacts count for this run
+            COUNT=$(gh api repos/$REPO/actions/runs/$RID/artifacts -q '.total_count')
+            echo "Run $RID artifacts: $COUNT"
             if [ "$COUNT" -gt 0 ]; then
               CHOSEN="$RID"
               break
@@ -73,7 +72,7 @@ jobs:
           done
 
           if [ -z "$CHOSEN" ]; then
-            echo "No runs with artifacts found among the last ${#RUNS[@]} successful runs."
+            echo "No successful runs with artifacts found on branch '$BRANCH'."
             exit 1
           fi
 
@@ -87,18 +86,17 @@ jobs:
           path: dist
           merge-multiple: true
 
-      - name: Verify artifacts exist
+      - name: Verify artifacts
         run: |
           if [ ! -d dist ]; then
-            echo "No artifacts were downloaded (dist/ missing)."
+            echo "dist/ missing after download."
             exit 1
           fi
           echo "Downloaded files:"
           ls -lah dist || true
-          # Fail if none of the expected bundles are present
           COUNT=$(ls -1 dist/* 2>/dev/null | wc -l | tr -d ' ')
           if [ "$COUNT" -eq 0 ]; then
-            echo "No files found in dist/. Ensure your Build workflow uploads artifacts."
+            echo "No files in dist/. Make sure the Build workflow uploaded bundles."
             exit 1
           fi
 
@@ -107,9 +105,8 @@ jobs:
           TAG="${{ inputs.tag }}"
           git fetch --tags
           if git rev-parse "$TAG" >/dev/null 2>&1; then
-            echo "Tag $TAG already exists. Skipping tag creation."
+            echo "Tag $TAG already exists, skipping tag creation."
           else
-            # Tag the current commit on the checked-out branch
             git tag -a "$TAG" -m "Release $TAG"
             git push origin "$TAG"
           fi

@@ -18,13 +18,15 @@ permissions:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
     steps:
       - name: Checkout (for tagging)
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      # Download artifacts from the latest successful Build MicroAlign on branch
       - name: Download artifacts from last successful Build MicroAlign
         uses: dawidd6/action-download-artifact@v6
         with:
@@ -32,14 +34,20 @@ jobs:
           workflow: build.yml
           workflow_conclusion: success
           branch: ${{ inputs.branch }}
-          name: ""              # download all artifacts
           path: dist
           if_no_artifact_found: fail
 
       - name: List downloaded
         run: ls -lah dist || true
 
+      - name: Configure git identity
+        run: |
+          git config user.name "${{ github.actor }}"
+          git config user.email "${{ github.actor }}@users.noreply.github.com"
+
       - name: Create tag if missing
+        env:
+          GIT_TERMINAL_PROMPT: "0"
         run: |
           set -e
           TAG="${{ inputs.tag }}"

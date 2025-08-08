@@ -1,0 +1,95 @@
+name: Build MicroAlign (composite)
+description: Cross-platform PyInstaller build + package + upload
+inputs:
+  app-name:
+    description: App/bundle name
+    default: MicroAlign
+  bundle-id:
+    description: macOS bundle identifier
+    default: com.yourco.microalign
+  icon-base:
+    description: Path to 1024px PNG used to generate .icns/.ico
+    default: align_app/assets/AppIcons/Assets.xcassets/AppIcon.appiconset/1024.png
+runs:
+  using: composite
+  steps:
+    - name: Install deps
+      shell: bash
+      run: |
+        python -m pip install --upgrade pip wheel setuptools
+        pip install pyinstaller PyQt5 opencv-python pillow
+
+    # macOS .icns from 1024.png
+    - name: Prepare .icns (macOS)
+      if: runner.os == 'macOS'
+      shell: bash
+      run: |
+        BASE="${{ inputs.icon-base }}"
+        mkdir -p align_app/assets/icons.iconset
+        sips -z 16 16   "$BASE" --out align_app/assets/icons.iconset/icon_16x16.png
+        sips -z 32 32   "$BASE" --out align_app/assets/icons.iconset/icon_16x16@2x.png
+        sips -z 32 32   "$BASE" --out align_app/assets/icons.iconset/icon_32x32.png
+        sips -z 64 64   "$BASE" --out align_app/assets/icons.iconset/icon_32x32@2x.png
+        sips -z 128 128 "$BASE" --out align_app/assets/icons.iconset/icon_128x128.png
+        sips -z 256 256 "$BASE" --out align_app/assets/icons.iconset/icon_128x128@2x.png
+        sips -z 256 256 "$BASE" --out align_app/assets/icons.iconset/icon_256x256.png
+        sips -z 512 512 "$BASE" --out align_app/assets/icons.iconset/icon_512x512.png
+        cp "$BASE" align_app/assets/icons.iconset/icon_512x512@2x.png
+        iconutil -c icns align_app/assets/icons.iconset -o align_app/assets/microalign.icns
+        rm -rf align_app/assets/icons.iconset
+
+    # .ico for Windows (and harmless to have in repo for others)
+    - name: Prepare .ico (all OS)
+      shell: bash
+      run: |
+        python - <<'PY'
+        from PIL import Image
+        p = "${{ inputs.icon-base }}"
+        im = Image.open(p).convert("RGBA")
+        sizes = [(256,256),(128,128),(64,64),(48,48),(32,32),(24,24),(16,16)]
+        im.save("align_app/assets/microalign.ico", sizes=sizes)
+        PY
+
+    # ---- Build per OS ----
+    - name: Build (macOS)
+      if: runner.os == 'macOS'
+      shell: bash
+      run: |
+        pyinstaller -w -D --clean -n "${{ inputs.app-name }}" \
+          --icon align_app/assets/microalign.icns \
+          --osx-bundle-identifier "${{ inputs.bundle-id }}" \
+          --add-data "align_app/assets:align_app/assets" \
+          align_app/app.py
+        cd dist
+        ditto -c -k --sequesterRsrc --keepParent "${{ inputs.app-name }}.app" "${{ inputs.app-name }}-macOS.zip"
+
+    - name: Build (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        pyinstaller -w -D --clean -n "${{ inputs.app-name }}" `
+          --icon align_app\assets\microalign.ico `
+          --add-data "align_app/assets;align_app/assets" `
+          align_app\app.py
+        Compress-Archive -Path dist\${{ inputs.app-name }} -DestinationPath dist\${{ inputs.app-name }}-Windows.zip
+
+    - name: Build (Linux)
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        pyinstaller -w -D --clean -n "${{ inputs.app-name }}" \
+          --add-data "align_app/assets:align_app/assets" \
+          align_app/app.py
+        cd dist
+        tar -czf "${{ inputs.app-name }}-Linux.tar.gz" "${{ inputs.app-name }}"
+
+    # ---- Upload per OS artifact ----
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ inputs.app-name }}-${{ runner.os }}
+        path: |
+          dist/${{ inputs.app-name }}-macOS.zip
+          dist/${{ inputs.app-name }}-Windows.zip
+          dist/${{ inputs.app-name }}-Linux.tar.gz
+        if-no-files-found: ignore

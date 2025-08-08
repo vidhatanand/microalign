@@ -1,9 +1,13 @@
-name: Build MicroAlign
+name: Release MicroAlign
 
 on:
   push:
-  pull_request:
+    tags:
+      - "v*"     # e.g. v0.1.0
   workflow_dispatch:
+
+permissions:
+  contents: write   # required to create releases
 
 jobs:
   build:
@@ -26,7 +30,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install pyinstaller PyQt5 opencv-python pillow
 
-      # ----- make icons from your xcassets -----
+      # ---- make icons from your assets ----
 
       - name: Prepare .icns (macOS)
         if: runner.os == 'macOS'
@@ -46,7 +50,6 @@ jobs:
           rm -rf align_app/assets/icons.iconset
 
       - name: Prepare .ico (all OS)
-        # Force bash so the heredoc works even on Windows
         shell: bash
         run: |
           python - <<'PY'
@@ -57,7 +60,7 @@ jobs:
           im.save("align_app/assets/microalign.ico", sizes=sizes)
           PY
 
-      # ----- build per OS with icons included -----
+      # ---- build per OS ----
 
       - name: Build (macOS)
         if: runner.os == 'macOS'
@@ -84,7 +87,7 @@ jobs:
             --add-data "align_app/assets:align_app/assets" \
             align_app/app.py
 
-      # ----- package artifacts -----
+      # ---- package artifacts ----
 
       - name: Package (macOS)
         if: runner.os == 'macOS'
@@ -104,12 +107,34 @@ jobs:
           cd dist
           tar -czf MicroAlign-Linux.tar.gz MicroAlign
 
-      - name: Upload artifact
+      - name: Upload build artifacts (for next job)
         uses: actions/upload-artifact@v4
         with:
-          name: MicroAlign-${{ runner.os }}
+          name: bundles-${{ runner.os }}
           path: |
             dist/MicroAlign-macOS.zip
             dist/MicroAlign-Windows.zip
             dist/MicroAlign-Linux.tar.gz
           if-no-files-found: ignore
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: bundles-*
+          merge-multiple: true
+          path: dist
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: MicroAlign ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+          files: |
+            dist/MicroAlign-macOS.zip
+            dist/MicroAlign-Windows.zip
+            dist/MicroAlign-Linux.tar.gz

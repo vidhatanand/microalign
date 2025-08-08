@@ -7,18 +7,22 @@ on:
         description: "Tag to create/release (e.g. v0.1.5)"
         required: true
       branch:
-        description: "Which branch's last successful Build to use"
+        description: "Branch to search for the last successful Build run"
         required: false
         default: "main"
+      run_id:
+        description: "Optional: specific Build workflow run-id to use"
+        required: false
       title:
-        description: "Release title (optional, defaults to tag)"
+        description: "Release title (defaults to tag)"
         required: false
       notes:
         description: "Release notes (optional)"
         required: false
 
 permissions:
-  contents: write  # needed to create tags & releases
+  contents: write   # create tags + releases
+  actions: read     # download artifacts from another run
 
 jobs:
   publish:
@@ -29,51 +33,88 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Find last successful 'Build MicroAlign' run on branch
-        id: find
+      - name: Resolve the build run to use
+        id: resolve
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          if [ -n "${{ inputs.run_id }}" ]; then
+            echo "Using provided run_id=${{ inputs.run_id }}"
+            echo "run_id=${{ inputs.run_id }}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
           BRANCH="${{ inputs.branch }}"
-          # Grab the latest successful run id for the named workflow & branch
-          RUN_ID=$(gh run list \
+          echo "Searching for a successful 'Build MicroAlign' run on branch: $BRANCH that has artifacts..."
+
+          # Get the last 15 successful runs for the workflow on the branch
+          mapfile -t RUNS < <(gh run list \
             --workflow "Build MicroAlign" \
             --branch "$BRANCH" \
             --status success \
-            -L 1 \
+            -L 15 \
             --json databaseId \
-            -q '.[0].databaseId')
+            -q '.[].databaseId')
 
-          if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
-            echo "No successful 'Build MicroAlign' run found on branch '$BRANCH'."
+          if [ ${#RUNS[@]} -eq 0 ]; then
+            echo "No successful runs found for 'Build MicroAlign' on branch $BRANCH"
             exit 1
           fi
 
-          echo "Using Build run-id: $RUN_ID"
-          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+          # Pick the newest run that actually has artifacts
+          CHOSEN=""
+          for RID in "${RUNS[@]}"; do
+            COUNT=$(gh run view "$RID" --json artifacts -q '.artifacts | length')
+            echo "Run $RID has $COUNT artifact(s)"
+            if [ "$COUNT" -gt 0 ]; then
+              CHOSEN="$RID"
+              break
+            fi
+          done
 
-      - name: Download artifacts from that build
+          if [ -z "$CHOSEN" ]; then
+            echo "No runs with artifacts found among the last ${#RUNS[@]} successful runs."
+            exit 1
+          fi
+
+          echo "Using run_id=$CHOSEN"
+          echo "run_id=$CHOSEN" >> "$GITHUB_OUTPUT"
+
+      - name: Download artifacts from chosen Build run
         uses: actions/download-artifact@v4
         with:
-          run-id: ${{ steps.find.outputs.run_id }}
+          run-id: ${{ steps.resolve.outputs.run_id }}
           path: dist
           merge-multiple: true
 
-      - name: List downloaded payload
-        run: ls -lah dist
+      - name: Verify artifacts exist
+        run: |
+          if [ ! -d dist ]; then
+            echo "No artifacts were downloaded (dist/ missing)."
+            exit 1
+          fi
+          echo "Downloaded files:"
+          ls -lah dist || true
+          # Fail if none of the expected bundles are present
+          COUNT=$(ls -1 dist/* 2>/dev/null | wc -l | tr -d ' ')
+          if [ "$COUNT" -eq 0 ]; then
+            echo "No files found in dist/. Ensure your Build workflow uploads artifacts."
+            exit 1
+          fi
 
-      - name: Create tag (if it doesn't already exist)
+      - name: Create tag if missing
         run: |
           TAG="${{ inputs.tag }}"
           git fetch --tags
           if git rev-parse "$TAG" >/dev/null 2>&1; then
             echo "Tag $TAG already exists. Skipping tag creation."
           else
+            # Tag the current commit on the checked-out branch
             git tag -a "$TAG" -m "Release $TAG"
             git push origin "$TAG"
           fi
 
-      - name: Create GitHub Release
+      - name: Create GitHub Release (attach downloaded bundles)
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.tag }}

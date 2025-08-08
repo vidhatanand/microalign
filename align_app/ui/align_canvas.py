@@ -1,4 +1,3 @@
-# [FULL FILE — paste replaces your current align_canvas.py]
 from __future__ import annotations
 
 from pathlib import Path
@@ -6,19 +5,26 @@ from typing import Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
-from PyQt5.QtCore import Qt, QRect, QPoint, QSize
+from PyQt5.QtCore import Qt, QRect, QPoint, QSize, pyqtSignal  # <-- add pyqtSignal
 from PyQt5.QtGui import QPainter, QPen, QColor, QPixmap
 from PyQt5.QtWidgets import QWidget, QMessageBox, QRubberBand
 
 from align_app.utils.img_io import (
-    load_image_bgr, uniform_preview_scale, clamp, bgr_to_qimage, SUPPORTED_LOWER
+    load_image_bgr,
+    uniform_preview_scale,
+    clamp,
+    bgr_to_qimage,
+    SUPPORTED_LOWER,
 )
-
 
 
 class AlignCanvas(QWidget):
     """Widget that renders base/current panels and handles manual alignment."""
+
     gap = 8  # gap between left/right panels in widget (draw space)
+
+    # NEW: notify when the “current” moving image changes
+    currentPathChanged = pyqtSignal(object)  # emits Path or None
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -38,32 +44,32 @@ class AlignCanvas(QWidget):
         self.cache_prev: Dict[Path, np.ndarray] = {}
 
         # Preview sizing (canonical preview scale & size)
-        self.s: float = 1.0            # preview scale relative to full-res
-        self.pw: int = 0               # preview width (canonical)
-        self.ph: int = 0               # preview height (canonical)
+        self.s: float = 1.0
+        self.pw: int = 0
+        self.ph: int = 0
 
         # Draw sizing (dynamic per paint to fit the widget)
-        self.ds: float = 1.0           # extra draw scale applied to preview
-        self.tw: int = 0               # drawn panel width  = int(pw * ds)
-        self.th: int = 0               # drawn panel height = int(ph * ds)
+        self.ds: float = 1.0
+        self.tw: int = 0
+        self.th: int = 0
 
-        # Per-image params (preview-space; i.e., before applying ds)
+        # Per-image params (preview-space)
         self.params: Dict[Path, Dict[str, float]] = {}
         self.idx: int = 0
 
         # UI state
         self.alpha = 0.5
-        self.step = 1.0                # MOVE step (px in preview space)
-        self.rot_step = 0.10           # degrees per tick
-        self.scale_step = 0.005        # 0.5% zoom
-        self.micro_scale_step = 0.001  # 0.1% zoom
+        self.step = 1.0
+        self.rot_step = 0.10
+        self.scale_step = 0.005
+        self.micro_scale_step = 0.001
         self.grid_on = True
-        self.grid_step = 40            # in preview px
+        self.grid_step = 40
         self.overlay_mode = False
         self.show_outline = True
 
         # Hover & drag
-        self.hover_cell: Optional[Tuple[int, int, int, int]] = None  # in DRAW coords
+        self.hover_cell: Optional[Tuple[int, int, int, int]] = None
         self.dragging = False
         self.drag_last: Optional[QPoint] = None
 
@@ -71,7 +77,8 @@ class AlignCanvas(QWidget):
         self.crop_mode = False
         self.rubber = QRubberBand(QRubberBand.Rectangle, self)
         self.crop_origin: Optional[QPoint] = None
-        self.crop_rect_px: Optional[QRect] = None  # in WIDGET/DRAW coords on base
+        self.crop_rect_px: Optional[QRect] = None
+        self.crop_from_aligned: bool = True
 
         # Cached rects for hit-testing
         self.left_rect = QRect()
@@ -87,7 +94,6 @@ class AlignCanvas(QWidget):
         crop_out: Optional[Path],
         preview_max_side: int = 1600,
     ):
-        """Set any subset of paths; load/reload when enough info is present."""
         if base_path is not None:
             self.base_path = base_path
         if src_dir is not None:
@@ -103,7 +109,9 @@ class AlignCanvas(QWidget):
             bh, bw = self.base_full.shape[:2]
             self.s = uniform_preview_scale(bw, bh, preview_max_side)
             self.pw, self.ph = int(round(bw * self.s)), int(round(bh * self.s))
-            self.base_prev = cv2.resize(self.base_full, (self.pw, self.ph), interpolation=cv2.INTER_AREA)
+            self.base_prev = cv2.resize(
+                self.base_full, (self.pw, self.ph), interpolation=cv2.INTER_AREA
+            )
         else:
             self.base_full = None
             self.base_prev = None
@@ -112,14 +120,23 @@ class AlignCanvas(QWidget):
         # Collect files if dir set (RECURSIVE)
         if self.src_dir and self.src_dir.is_dir():
             self.files = sorted(
-                (p for p in self.src_dir.rglob("*")
-                 if p.is_file() and p.suffix.lower() in SUPPORTED_LOWER),
-                key=lambda p: str(p).lower()
+                (
+                    p
+                    for p in self.src_dir.rglob("*")
+                    if p.is_file() and p.suffix.lower() in SUPPORTED_LOWER
+                ),
+                key=lambda p: str(p).lower(),
             )
             # reset params for new files
-            self.params = {p: {"tx": 0.0, "ty": 0.0, "theta": 0.0, "scale": 1.0} for p in self.files}
+            self.params = {
+                p: {"tx": 0.0, "ty": 0.0, "theta": 0.0, "scale": 1.0}
+                for p in self.files
+            }
             self.idx = 0
             self.cache_prev.clear()
+
+        # notify current file (may be None)
+        self.currentPathChanged.emit(self.current_path())
 
         self.update()
 
@@ -128,6 +145,7 @@ class AlignCanvas(QWidget):
             return
         if self.idx > 0:
             self.idx -= 1
+            self.currentPathChanged.emit(self.current_path())  # NEW
             self.update()
 
     def next_image(self):
@@ -135,6 +153,7 @@ class AlignCanvas(QWidget):
             return
         if self.idx < len(self.files) - 1:
             self.idx += 1
+            self.currentPathChanged.emit(self.current_path())  # NEW
             self.update()
 
     def move_dxdy(self, dx: float, dy: float):
@@ -174,7 +193,9 @@ class AlignCanvas(QWidget):
 
     def save_current_aligned(self):
         if not (self.align_out and self.base_full is not None):
-            QMessageBox.warning(self, "Missing path", "Please set Align Out folder in the toolbar.")
+            QMessageBox.warning(
+                self, "Missing path", "Please set Align Out folder in the toolbar."
+            )
             return
         self.align_out.mkdir(parents=True, exist_ok=True)
         path = self.current_path()
@@ -186,25 +207,38 @@ class AlignCanvas(QWidget):
         M_full = self._lift_small_to_full(M_small)
         img_full = load_image_bgr(str(path))
         bw, bh = self.base_full.shape[1], self.base_full.shape[0]
-        out = cv2.warpAffine(img_full, M_full, (bw, bh),
-                             flags=cv2.INTER_LINEAR,
-                             borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0))
+        out = cv2.warpAffine(
+            img_full,
+            M_full,
+            (bw, bh),
+            flags=cv2.INTER_LINEAR,
+            borderMode=cv2.BORDER_CONSTANT,
+            borderValue=(0, 0, 0),
+        )
         out_path = self.align_out / f"{path.stem}.png"
         cv2.imwrite(str(out_path), out)
         QMessageBox.information(self, "Saved", f"Aligned -> {out_path}")
 
-    def start_crop_mode(self):
+    def start_crop_mode(self, use_aligned: Optional[bool] = None):
         if self.base_full is None:
             return
         if not self.crop_out:
-            QMessageBox.warning(self, "Missing path", "Please set Crops Out folder in the toolbar.")
+            QMessageBox.warning(
+                self, "Missing path", "Please set Crops Out folder in the toolbar."
+            )
             return
+        if use_aligned is not None:
+            self.crop_from_aligned = bool(use_aligned)
         self.crop_mode = True
         self.crop_origin = None
         self.rubber.hide()
-        QMessageBox.information(self, "Crop",
-                                "Drag a rectangle on the BASE (left) panel.\n"
-                                "Release mouse to confirm.")
+        src = "ALIGNED images" if self.crop_from_aligned else "ORIGINAL source images"
+        QMessageBox.information(
+            self,
+            "Crop",
+            "Drag a rectangle on the BASE (left) panel.\n"
+            f"Release mouse to crop {src}.",
+        )
 
     # ---- internals ----
 
@@ -219,17 +253,22 @@ class AlignCanvas(QWidget):
             return None
         return self.files[self.idx]
 
+
     def _get_preview(self, path: Path) -> np.ndarray:
         if path in self.cache_prev:
             return self.cache_prev[path]
         full = load_image_bgr(str(path))
-        prev = cv2.resize(full, (int(round(full.shape[1] * self.s)),
-                                 int(round(full.shape[0] * self.s))),
-                          interpolation=cv2.INTER_AREA)
+        prev = cv2.resize(
+            full,
+            (int(round(full.shape[1] * self.s)), int(round(full.shape[0] * self.s))),
+            interpolation=cv2.INTER_AREA,
+        )
         self.cache_prev[path] = prev
         return prev
 
-    def _params_to_matrix_small(self, mov_prev: np.ndarray, p: Dict[str, float]) -> np.ndarray:
+    def _params_to_matrix_small(
+        self, mov_prev: np.ndarray, p: Dict[str, float]
+    ) -> np.ndarray:
         h, w = mov_prev.shape[:2]
         cx, cy = w / 2.0, h / 2.0
         M = cv2.getRotationMatrix2D((cx, cy), p["theta"], p["scale"])
@@ -246,25 +285,34 @@ class AlignCanvas(QWidget):
         W = S_inv @ A @ S
         return W[:2, :]
 
-    def _compose_right_preview(self, mov_prev: np.ndarray, M_small: np.ndarray) -> np.ndarray:
+    def _compose_right_preview(
+        self, mov_prev: np.ndarray, M_small: np.ndarray
+    ) -> np.ndarray:
         # Warp at PREVIEW size (pw,ph)
         warped = cv2.warpAffine(
-            mov_prev, M_small, (self.pw, self.ph),
+            mov_prev,
+            M_small,
+            (self.pw, self.ph),
             flags=cv2.INTER_LINEAR,
-            borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0)
+            borderMode=cv2.BORDER_CONSTANT,
+            borderValue=(0, 0, 0),
         )
         comp = warped
         if self.overlay_mode and self.base_prev is not None:
             base = self.base_prev.copy()
             mask = (warped > 0).any(axis=2).astype(np.uint8) * 255
             mask3 = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
-            comp = np.where(mask3 > 0,
-                            cv2.addWeighted(base, 1 - self.alpha, warped, self.alpha, 0),
-                            base)
+            comp = np.where(
+                mask3 > 0,
+                cv2.addWeighted(base, 1 - self.alpha, warped, self.alpha, 0),
+                base,
+            )
 
         if self.show_outline:
             h, w = mov_prev.shape[:2]
-            corners = np.float32([[0, 0], [w - 1, 0], [w - 1, h - 1], [0, h - 1]]).reshape(-1, 1, 2)
+            corners = np.float32(
+                [[0, 0], [w - 1, 0], [w - 1, h - 1], [0, h - 1]]
+            ).reshape(-1, 1, 2)
             M3 = np.vstack([M_small, [0, 0, 1]]).astype(np.float32)
             tc = cv2.perspectiveTransform(corners, M3).astype(int).reshape(-1, 2)
             cv2.polylines(comp, [tc], True, (0, 255, 255), 1, cv2.LINE_AA)
@@ -298,7 +346,9 @@ class AlignCanvas(QWidget):
 
         if not self.have_base():
             p.setPen(QColor(220, 220, 220))
-            p.drawText(self.rect(), Qt.AlignCenter, "Pick a Base image from the toolbar.")
+            p.drawText(
+                self.rect(), Qt.AlignCenter, "Pick a Base image from the toolbar."
+            )
             p.end()
             return
 
@@ -307,7 +357,9 @@ class AlignCanvas(QWidget):
         # Draw left (base)
         left_bgr = self.base_prev.copy()
         if self.ds != 1.0:
-            left_bgr = cv2.resize(left_bgr, (self.tw, self.th), interpolation=cv2.INTER_AREA)
+            left_bgr = cv2.resize(
+                left_bgr, (self.tw, self.th), interpolation=cv2.INTER_AREA
+            )
         left_img = QPixmap.fromImage(bgr_to_qimage(left_bgr))
 
         # Right (moving) if any file exists
@@ -319,7 +371,9 @@ class AlignCanvas(QWidget):
             M_small = self._params_to_matrix_small(mov_prev, params)
             right_bgr = self._compose_right_preview(mov_prev, M_small)
             if self.ds != 1.0:
-                right_bgr = cv2.resize(right_bgr, (self.tw, self.th), interpolation=cv2.INTER_AREA)
+                right_bgr = cv2.resize(
+                    right_bgr, (self.tw, self.th), interpolation=cv2.INTER_AREA
+                )
             right_img = QPixmap.fromImage(bgr_to_qimage(right_bgr))
 
         # Panel rects (draw coords)
@@ -408,13 +462,22 @@ class AlignCanvas(QWidget):
     def mousePressEvent(self, evt):
         pos = evt.pos()
         # Begin drag on right panel
-        if evt.button() == Qt.LeftButton and self.right_rect.contains(pos) and not self.crop_mode and self.have_files():
+        if (
+            evt.button() == Qt.LeftButton
+            and self.right_rect.contains(pos)
+            and not self.crop_mode
+            and self.have_files()
+        ):
             self.dragging = True
             self.drag_last = pos
             self.setCursor(Qt.ClosedHandCursor)
 
         # Begin crop on left panel
-        if evt.button() == Qt.LeftButton and self.crop_mode and self.left_rect.contains(pos):
+        if (
+            evt.button() == Qt.LeftButton
+            and self.crop_mode
+            and self.left_rect.contains(pos)
+        ):
             self.crop_origin = pos
             self.rubber.setGeometry(QRect(pos, QSize()))
             self.rubber.show()
@@ -499,7 +562,7 @@ class AlignCanvas(QWidget):
         elif key in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_S):
             self.save_current_aligned()
 
-        # Crop mode start
+        # Crop mode start (defaults to previous choice)
         elif key == Qt.Key_C:
             self.start_crop_mode()
 
@@ -542,22 +605,32 @@ class AlignCanvas(QWidget):
         self.crop_out.mkdir(parents=True, exist_ok=True)
 
         # Base crop
-        base_crop = self.base_full[cy:cy+ch, cx:cx+cw]
+        base_crop = self.base_full[cy : cy + ch, cx : cx + cw]
         cv2.imwrite(str((self.crop_out / f"{self.base_path.stem}.png")), base_crop)
 
-        # Each aligned image: use saved aligned if exists, else warp from params
+        # Each image: choose source based on self.crop_from_aligned
         for pth in self.files:
-            aligned_png = (self.align_out / f"{pth.stem}.png") if self.align_out else None
-            if aligned_png and aligned_png.exists():
-                img = cv2.imread(str(aligned_png), cv2.IMREAD_COLOR)
+            if self.crop_from_aligned:
+                # Use saved aligned PNG if present, else warp from params
+                img = None
+                if self.align_out:
+                    cand = self.align_out / f"{pth.stem}.png"
+                    if cand.exists():
+                        img = cv2.imread(str(cand), cv2.IMREAD_COLOR)
                 if img is None:
                     img = self._warp_full_from_params(pth)
             else:
+                # Always derive from ORIGINAL source by warping on-the-fly
                 img = self._warp_full_from_params(pth)
-            crop = img[cy:cy+ch, cx:cx+cw]
+
+            crop = img[cy : cy + ch, cx : cx + cw]
             cv2.imwrite(str((self.crop_out / f"{pth.stem}.png")), crop)
 
-        QMessageBox.information(self, "Cropped", f"Crops -> {self.crop_out}")
+        QMessageBox.information(
+            self,
+            "Cropped",
+            f"Cropped {'aligned' if self.crop_from_aligned else 'source'} images -> {self.crop_out}",
+        )
 
     def _warp_full_from_params(self, path: Path) -> np.ndarray:
         mov_prev = self._get_preview(path)
@@ -567,8 +640,11 @@ class AlignCanvas(QWidget):
         bw, bh = self.base_full.shape[1], self.base_full.shape[0]
         M_full = self._lift_small_to_full(M_small)
         out = cv2.warpAffine(
-            img_full, M_full, (bw, bh),
+            img_full,
+            M_full,
+            (bw, bh),
             flags=cv2.INTER_LINEAR,
-            borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0)
+            borderMode=cv2.BORDER_CONSTANT,
+            borderValue=(0, 0, 0),
         )
         return out

@@ -77,7 +77,8 @@ class MainWindow(QMainWindow):
         self.watcher.fileChanged.connect(self._fs_changed)
         self._fs_timer = QTimer(self)
         self._fs_timer.setSingleShot(True)
-        self._fs_timer.timeout.connect(self._fs_refresh())
+        self._fs_timer.timeout.connect(lambda: self._fs_refresh())
+
 
         # Keep sidebar selection in sync with current image
         self.canvas.currentPathChanged.connect(self._highlight_current_in_sidebar)

@@ -38,18 +38,21 @@ class MainWindow(QMainWindow):
         self.sidebar.setMinimumWidth(320)
         splitter.addWidget(self.sidebar)
 
-        # Right: toolbars + canvas
+        # Right: two toolbars (top/bottom) + canvas
         right = QWidget()
         layout = QVBoxLayout(right)
         layout.setContentsMargins(0, 0, 0, 0)
 
         self.toolbar_paths = QToolBar("Paths")
-        self.toolbar_align = QToolBar("Align")
-        for tb in (self.toolbar_paths, self.toolbar_align):
+        self.toolbar_align_top = QToolBar("Align (Affine)")
+        self.toolbar_align_bottom = QToolBar("Adjust (Perspective & View)")
+
+        for tb in (self.toolbar_paths, self.toolbar_align_top, self.toolbar_align_bottom):
             tb.setIconSize(QSize(20, 20))
 
         layout.addWidget(self.toolbar_paths)
-        layout.addWidget(self.toolbar_align)
+        layout.addWidget(self.toolbar_align_top)
+        layout.addWidget(self.toolbar_align_bottom)
 
         self.canvas = AlignCanvas()
         layout.addWidget(self.canvas, 1)
@@ -59,7 +62,7 @@ class MainWindow(QMainWindow):
 
         # Build toolbars
         self._build_paths_toolbar()
-        self._build_align_toolbar()
+        self._build_align_toolbars()
 
         # Sidebar interactions
         self.sidebar.itemDoubleClicked.connect(self._sidebar_double_clicked)
@@ -67,8 +70,8 @@ class MainWindow(QMainWindow):
         # Status label (live)
         self.status_label = QLabel()
         self.status_label.setStyleSheet("QLabel { color: #ddd; padding-left: 8px; }")
-        self.toolbar_align.addSeparator()
-        self.toolbar_align.addWidget(self.status_label)
+        self.toolbar_align_bottom.addSeparator()
+        self.toolbar_align_bottom.addWidget(self.status_label)
         self._start_status_timer()
 
         # File/folder watcher
@@ -78,7 +81,6 @@ class MainWindow(QMainWindow):
         self._fs_timer = QTimer(self)
         self._fs_timer.setSingleShot(True)
         self._fs_timer.timeout.connect(lambda: self._fs_refresh())
-
 
         # Keep sidebar selection in sync with current image
         self.canvas.currentPathChanged.connect(self._highlight_current_in_sidebar)
@@ -105,29 +107,16 @@ class MainWindow(QMainWindow):
         self.toolbar_paths.addSeparator()
         add(act_del)
 
-    def _build_align_toolbar(self):
-        add = self.toolbar_align.addAction
+    def _build_align_toolbars(self):
+        add_top = self.toolbar_align_top.addAction
+        add_bot = self.toolbar_align_bottom.addAction
 
-        # Navigation & Save
-        a_prev = QAction(
-            "Prev", self, triggered=lambda checked=False: self.canvas.prev_image()
-        )
-        a_next = QAction(
-            "Next", self, triggered=lambda checked=False: self.canvas.next_image()
-        )
-        a_save = QAction(
-            "Save",
-            self,
-            triggered=lambda checked=False: self.canvas.save_current_aligned(),
-        )
-        a_savn = QAction(
-            "Save+Next",
-            self,
-            triggered=lambda checked=False: (
-                self.canvas.save_current_aligned(),
-                self.canvas.next_image(),
-            ),
-        )
+        # ---- Top row: Navigation & Affine controls ----
+        a_prev = QAction("Prev", self, triggered=lambda checked=False: self.canvas.prev_image())
+        a_next = QAction("Next", self, triggered=lambda checked=False: self.canvas.next_image())
+        a_save = QAction("Save", self, triggered=lambda checked=False: self.canvas.save_current_aligned())
+        a_savn = QAction("Save+Next", self,
+                         triggered=lambda checked=False: (self.canvas.save_current_aligned(), self.canvas.next_image()))
         for a, tip in [
             (a_prev, "Show previous image from Source directory"),
             (a_next, "Show next image from Source directory"),
@@ -135,170 +124,77 @@ class MainWindow(QMainWindow):
             (a_savn, "Save current aligned PNG, then go to next image"),
         ]:
             a.setToolTip(tip)
-            add(a)
+            add_top(a)
 
-        self.toolbar_align.addSeparator()
+        self.toolbar_align_top.addSeparator()
 
-        # Move buttons
+        # Move buttons (affine translation; in perspective mode they nudge the selected corner)
         for label, dx, dy in [("←", -1, 0), ("→", +1, 0), ("↑", 0, -1), ("↓", 0, +1)]:
-            add(
-                QAction(
-                    label,
-                    self,
-                    triggered=(
-                        lambda dx=dx, dy=dy: (
-                            lambda checked=False: self.canvas.move_dxdy(
-                                dx * self.canvas.step, dy * self.canvas.step
-                            )
-                        )
-                    )(),
-                )
-            )
-        self.toolbar_align.addSeparator()
+            add_top(QAction(label, self,
+                            triggered=(lambda dx=dx, dy=dy:
+                                       (lambda checked=False: self.canvas.move_dxdy(dx*self.canvas.step,
+                                                                                    dy*self.canvas.step)))()))
+        self.toolbar_align_top.addSeparator()
 
-        # Step / Rotate / Zoom
-        add(
-            QAction(
-                "Step−",
-                self,
-                triggered=lambda checked=False: setattr(
-                    self.canvas, "step", max(0.5, self.canvas.step - 1.0)
-                ),
-            )
-        )
-        add(
-            QAction(
-                "Step+",
-                self,
-                triggered=lambda checked=False: setattr(
-                    self.canvas, "step", min(50.0, self.canvas.step + 1.0)
-                ),
-            )
-        )
-        self.toolbar_align.addSeparator()
-        add(
-            QAction(
-                "Rot−",
-                self,
-                triggered=lambda checked=False: self.canvas.rotate_deg(
-                    -self.canvas.rot_step
-                ),
-            )
-        )
-        add(
-            QAction(
-                "Rot+",
-                self,
-                triggered=lambda checked=False: self.canvas.rotate_deg(
-                    +self.canvas.rot_step
-                ),
-            )
-        )
-        self.toolbar_align.addSeparator()
-        add(
-            QAction(
-                "Zoom−",
-                self,
-                triggered=lambda checked=False: self.canvas.zoom_factor(
-                    1.0 - self.canvas.scale_step
-                ),
-            )
-        )
-        add(
-            QAction(
-                "Zoom+",
-                self,
-                triggered=lambda checked=False: self.canvas.zoom_factor(
-                    1.0 + self.canvas.scale_step
-                ),
-            )
-        )
-        add(
-            QAction(
-                "µZoom−",
-                self,
-                triggered=lambda checked=False: self.canvas.zoom_factor(
-                    1.0 - self.canvas.micro_scale_step
-                ),
-            )
-        )
-        add(
-            QAction(
-                "µZoom+",
-                self,
-                triggered=lambda checked=False: self.canvas.zoom_factor(
-                    1.0 + self.canvas.micro_scale_step
-                ),
-            )
-        )
-        self.toolbar_align.addSeparator()
+        # Step / Rotate / Zoom (affine)
+        add_top(QAction("Step−", self, triggered=lambda checked=False:
+                        setattr(self.canvas, "step", max(0.5, self.canvas.step - 1.0))))
+        add_top(QAction("Step+", self, triggered=lambda checked=False:
+                        setattr(self.canvas, "step", min(50.0, self.canvas.step + 1.0))))
+        self.toolbar_align_top.addSeparator()
+        add_top(QAction("Rot−", self, triggered=lambda checked=False: self.canvas.rotate_deg(-self.canvas.rot_step)))
+        add_top(QAction("Rot+", self, triggered=lambda checked=False: self.canvas.rotate_deg(+self.canvas.rot_step)))
+        self.toolbar_align_top.addSeparator()
+        add_top(QAction("Zoom−", self, triggered=lambda checked=False: self.canvas.zoom_factor(1.0 - self.canvas.scale_step)))
+        add_top(QAction("Zoom+", self, triggered=lambda checked=False: self.canvas.zoom_factor(1.0 + self.canvas.scale_step)))
+        add_top(QAction("µZoom−", self, triggered=lambda checked=False: self.canvas.zoom_factor(1.0 - self.canvas.micro_scale_step)))
+        add_top(QAction("µZoom+", self, triggered=lambda checked=False: self.canvas.zoom_factor(1.0 + self.canvas.micro_scale_step)))
+        self.toolbar_align_top.addSeparator()
+        add_top(QAction("Reset", self, triggered=lambda checked=False: self.canvas.reset_current()))
+
+        # ---- Bottom row: Perspective controls + View toggles + Crop ----
+        add_bot(QAction("Perspective (P)", self, triggered=lambda checked=False: self._toggle_perspective()))
+        self.toolbar_align_bottom.addSeparator()
+
+        # Corner select
+        for i in range(4):
+            add_bot(QAction(f"C{i+1}", self, triggered=(lambda i=i: (lambda checked=False: self._select_corner(i)))()))
+        self.toolbar_align_bottom.addSeparator()
+
+        # Corner step tuning
+        add_bot(QAction("CStep−", self, triggered=lambda checked=False:
+                        setattr(self.canvas, "corner_step", max(0.1, self.canvas.corner_step - 0.5))))
+        add_bot(QAction("CStep+", self, triggered=lambda checked=False:
+                        setattr(self.canvas, "corner_step", min(100.0, self.canvas.corner_step + 0.5))))
+        add_bot(QAction("µCStep−", self, triggered=lambda checked=False:
+                        setattr(self.canvas, "corner_micro_step", max(0.05, self.canvas.corner_micro_step - 0.1))))
+        add_bot(QAction("µCStep+", self, triggered=lambda checked=False:
+                        setattr(self.canvas, "corner_micro_step", min(10.0, self.canvas.corner_micro_step + 0.1))))
+        self.toolbar_align_bottom.addSeparator()
 
         # View toggles
-        add(
-            QAction(
-                "Reset",
-                self,
-                triggered=lambda checked=False: self.canvas.reset_current(),
-            )
-        )
-        add(
-            QAction(
-                "Overlay", self, triggered=lambda checked=False: self._toggle_overlay()
-            )
-        )
-        add(
-            QAction(
-                "Alpha−",
-                self,
-                triggered=lambda checked=False: setattr(
-                    self.canvas, "alpha", clamp(self.canvas.alpha - 0.05, 0.0, 1.0)
-                ),
-            )
-        )
-        add(
-            QAction(
-                "Alpha+",
-                self,
-                triggered=lambda checked=False: setattr(
-                    self.canvas, "alpha", clamp(self.canvas.alpha + 0.05, 0.0, 1.0)
-                ),
-            )
-        )
-        add(QAction("Grid", self, triggered=lambda checked=False: self._toggle_grid()))
-        add(
-            QAction(
-                "Grid−",
-                self,
-                triggered=lambda checked=False: setattr(
-                    self.canvas, "grid_step", max(10, self.canvas.grid_step - 5)
-                ),
-            )
-        )
-        add(
-            QAction(
-                "Grid+",
-                self,
-                triggered=lambda checked=False: setattr(
-                    self.canvas, "grid_step", min(200, self.canvas.grid_step + 5)
-                ),
-            )
-        )
-        add(
-            QAction(
-                "Outline", self, triggered=lambda checked=False: self._toggle_outline()
-            )
-        )
-        self.toolbar_align.addSeparator()
+        add_bot(QAction("Overlay", self, triggered=lambda checked=False: self._toggle_overlay()))
+        add_bot(QAction("Alpha−", self, triggered=lambda checked=False:
+                        setattr(self.canvas, "alpha", clamp(self.canvas.alpha - 0.05, 0.0, 1.0))))
+        add_bot(QAction("Alpha+", self, triggered=lambda checked=False:
+                        setattr(self.canvas, "alpha", clamp(self.canvas.alpha + 0.05, 0.0, 1.0))))
+        add_bot(QAction("Grid", self, triggered=lambda checked=False: self._toggle_grid()))
+        add_bot(QAction("Grid−", self, triggered=lambda checked=False:
+                        setattr(self.canvas, "grid_step", max(10, self.canvas.grid_step - 5))))
+        add_bot(QAction("Grid+", self, triggered=lambda checked=False:
+                        setattr(self.canvas, "grid_step", min(200, self.canvas.grid_step + 5))))
+        add_bot(QAction("Outline", self, triggered=lambda checked=False: self._toggle_outline()))
+        self.toolbar_align_bottom.addSeparator()
 
-        # Crop (choice dialog lives in MainWindow)
-        add(
-            QAction(
-                "Crop", self, triggered=lambda checked=False: self._choose_crop_target()
-            )
-        )
+        # Crop (choose target here; canvas just starts mode)
+        add_bot(QAction("Crop Aligned…", self, triggered=lambda checked=False: self.canvas.start_crop_mode(use_aligned=True)))
+        add_bot(QAction("Crop Source…",  self, triggered=lambda checked=False: self.canvas.start_crop_mode(use_aligned=False)))
 
         # After any toolbar action, repaint & sync highlight
-        self.toolbar_align.actionTriggered.connect(
+        self.toolbar_align_top.actionTriggered.connect(
+            lambda _a: (self.canvas.update(), self._highlight_current_in_sidebar())
+        )
+        self.toolbar_align_bottom.actionTriggered.connect(
             lambda _a: (self.canvas.update(), self._highlight_current_in_sidebar())
         )
 
@@ -315,73 +211,65 @@ class MainWindow(QMainWindow):
         zstep = self.canvas.scale_step * 100.0
         mzstep = self.canvas.micro_scale_step * 100.0
         alpha = self.canvas.alpha
-        txt = (
-            f"Move step: {step:.1f}px   Rot step: {rstep:.2f}°   "
-            f"Zoom step: ±{zstep:.2f}% (µ ±{mzstep:.2f}%)   "
-            f"Alpha: {alpha:.2f}"
-        )
+
+        # Perspective bits
+        p = None
+        cur = self.canvas.current_path()
+        mode_txt = "—"
+        cidx_txt = "—"
+        cstep = self.canvas.corner_step
+        mstep = self.canvas.corner_micro_step
+        if cur:
+            p = self.canvas.params.get(cur)
+        if p:
+            mode_txt = "PERSPECTIVE" if p.get("mode") == "persp" else "AFFINE"
+            cidx_txt = str(self.canvas.corner_idx + 1)
+
+        txt = (f"Mode: {mode_txt}  |  Move step: {step:.1f}px  Rot step: {rstep:.2f}°  "
+               f"Zoom step: ±{zstep:.2f}% (µ ±{mzstep:.2f}%)  "
+               f"CStep: {cstep:.2f} (µ {mstep:.2f})  Sel C:{cidx_txt}  "
+               f"Alpha: {alpha:.2f}")
         self.status_label.setText(txt)
 
     # ---------- Path pickers ----------
 
     def _pick_base_image(self):
         fn, _ = QFileDialog.getOpenFileName(
-            self,
-            "Choose Base Image",
-            str(Path.home()),
-            "Images (*.png *.jpg *.jpeg *.jpe)",
-        )
+            self, "Choose Base Image", str(Path.home()),
+            "Images (*.png *.jpg *.jpeg *.jpe)")
         if fn:
-            self.canvas.set_paths(
-                base_path=Path(fn), src_dir=None, align_out=None, crop_out=None
-            )
+            self.canvas.set_paths(base_path=Path(fn), src_dir=None, align_out=None, crop_out=None)
             self._rebuild_sidebar()
             self._update_watchers()
             self._highlight_current_in_sidebar()
 
     def _pick_src_dir(self):
-        d = QFileDialog.getExistingDirectory(
-            self, "Choose Source Directory", str(Path.home())
-        )
+        d = QFileDialog.getExistingDirectory(self, "Choose Source Directory", str(Path.home()))
         if d:
-            self.canvas.set_paths(
-                base_path=None, src_dir=Path(d), align_out=None, crop_out=None
-            )
+            self.canvas.set_paths(base_path=None, src_dir=Path(d), align_out=None, crop_out=None)
             self._rebuild_sidebar()
             self._update_watchers()
             self._highlight_current_in_sidebar()
 
     def _pick_align_out(self):
-        d = QFileDialog.getExistingDirectory(
-            self, "Choose Align Out Directory", str(Path.home())
-        )
+        d = QFileDialog.getExistingDirectory(self, "Choose Align Out Directory", str(Path.home()))
         if d:
-            self.canvas.set_paths(
-                base_path=None, src_dir=None, align_out=Path(d), crop_out=None
-            )
+            self.canvas.set_paths(base_path=None, src_dir=None, align_out=Path(d), crop_out=None)
             self._rebuild_sidebar()
             self._update_watchers()
             self._highlight_current_in_sidebar()
 
     def _pick_crop_out(self):
-        d = QFileDialog.getExistingDirectory(
-            self, "Choose Crops Out Directory", str(Path.home())
-        )
+        d = QFileDialog.getExistingDirectory(self, "Choose Crops Out Directory", str(Path.home()))
         if d:
-            self.canvas.set_paths(
-                base_path=None, src_dir=None, align_out=None, crop_out=Path(d)
-            )
+            self.canvas.set_paths(base_path=None, src_dir=None, align_out=None, crop_out=Path(d))
             self._rebuild_sidebar()
             self._update_watchers()
             self._highlight_current_in_sidebar()
 
     def _reload_all(self):
-        self.canvas.set_paths(
-            self.canvas.base_path,
-            self.canvas.src_dir,
-            self.canvas.align_out,
-            self.canvas.crop_out,
-        )
+        self.canvas.set_paths(self.canvas.base_path, self.canvas.src_dir,
+                              self.canvas.align_out, self.canvas.crop_out)
         self._rebuild_sidebar()
         self._update_watchers()
         self._highlight_current_in_sidebar()
@@ -400,7 +288,7 @@ class MainWindow(QMainWindow):
         else:
             QTreeWidgetItem(base_root, ["(none)"])
 
-        # Source Directory
+        # Source Directory (recursive tree)
         src_root = QTreeWidgetItem(self.sidebar, ["Source Directory"])
         src_root.setExpanded(True)
         if self.canvas.src_dir:
@@ -410,7 +298,7 @@ class MainWindow(QMainWindow):
         else:
             QTreeWidgetItem(src_root, ["(none)"])
 
-        # Align Out
+        # Align Out (recursive tree)
         align_root = QTreeWidgetItem(self.sidebar, ["Align Out"])
         align_root.setExpanded(True)
         if self.canvas.align_out:
@@ -421,7 +309,7 @@ class MainWindow(QMainWindow):
         else:
             QTreeWidgetItem(align_root, ["(none)"])
 
-        # Crops Out
+        # Crops Out (recursive tree)
         crop_root = QTreeWidgetItem(self.sidebar, ["Crops Out"])
         crop_root.setExpanded(True)
         if self.canvas.crop_out:
@@ -438,14 +326,12 @@ class MainWindow(QMainWindow):
             self.canvas.idx = min(self.canvas.idx, len(self.canvas.files) - 1)
             self.canvas.update()
 
-        # NEW: select the current file node
+        # Select the current file node
         self._highlight_current_in_sidebar()
 
     def _add_dir_tree(self, parent_item: QTreeWidgetItem, dir_path: Path):
         try:
-            entries = sorted(
-                dir_path.iterdir(), key=lambda p: (p.is_file(), p.name.lower())
-            )
+            entries = sorted(dir_path.iterdir(), key=lambda p: (p.is_file(), p.name.lower()))
         except Exception:
             return
         for p in entries:
@@ -470,9 +356,7 @@ class MainWindow(QMainWindow):
                     self.canvas.update()
                     self._highlight_current_in_sidebar()
         elif p.is_dir():
-            self.canvas.set_paths(
-                base_path=None, src_dir=p, align_out=None, crop_out=None
-            )
+            self.canvas.set_paths(base_path=None, src_dir=p, align_out=None, crop_out=None)
             self._rebuild_sidebar()
             self._update_watchers()
             self._highlight_current_in_sidebar()
@@ -493,11 +377,9 @@ class MainWindow(QMainWindow):
 
         if p.is_dir():
             reply = QMessageBox.question(
-                self,
-                "Delete Folder?",
+                self, "Delete Folder?",
                 f"Delete the folder and ALL its contents?\n\n{p}",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No,
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No
             )
             if reply != QMessageBox.Yes:
                 return
@@ -507,11 +389,9 @@ class MainWindow(QMainWindow):
                 QMessageBox.critical(self, "Delete failed", str(e))
         else:
             reply = QMessageBox.question(
-                self,
-                "Delete File?",
+                self, "Delete File?",
                 f"Delete file?\n\n{p}",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No,
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No
             )
             if reply != QMessageBox.Yes:
                 return
@@ -522,7 +402,7 @@ class MainWindow(QMainWindow):
 
         self._reload_all()
 
-    # ---------- toggles ----------
+    # ---------- toggles & helpers ----------
 
     def _toggle_overlay(self):
         self.canvas.overlay_mode = not self.canvas.overlay_mode
@@ -536,31 +416,17 @@ class MainWindow(QMainWindow):
         self.canvas.show_outline = not self.canvas.show_outline
         self.canvas.update()
 
-    # ---------- crop choice dialog ----------
-
-    def _choose_crop_target(self):
-        if not self.canvas.have_base():
-            QMessageBox.information(self, "Crop", "Load a Base image first.")
+    def _toggle_perspective(self):
+        cur = self.canvas.current_path()
+        if not cur:
             return
-        if not self.canvas.crop_out:
-            QMessageBox.information(self, "Crop", "Pick a Crops Out directory first.")
-            return
+        p = self.canvas.params[cur]
+        p["mode"] = "persp" if p["mode"] == "affine" else "affine"
+        self.canvas.update()
 
-        box = QMessageBox(self)
-        box.setWindowTitle("Crop which images?")
-        box.setText(
-            "Choose which images to crop with the selected rectangle on the Base image:"
-        )
-        btn_aligned = box.addButton("Aligned images", QMessageBox.AcceptRole)
-        btn_source = box.addButton("Original source images", QMessageBox.ActionRole)
-        box.addButton(QMessageBox.Cancel)
-        box.exec_()
-        clicked = box.clickedButton()
-        if clicked == btn_aligned:
-            self.canvas.start_crop_mode(use_aligned=True)
-        elif clicked == btn_source:
-            self.canvas.start_crop_mode(use_aligned=False)
-        # Cancel -> do nothing
+    def _select_corner(self, i: int):
+        self.canvas.corner_idx = i
+        self.canvas.update()
 
     # ---------- filesystem watching ----------
 
@@ -607,11 +473,7 @@ class MainWindow(QMainWindow):
                 self.watcher.addPaths(uniq)
             except Exception:
                 tops = []
-                for d in (
-                    self.canvas.src_dir,
-                    self.canvas.align_out,
-                    self.canvas.crop_out,
-                ):
+                for d in (self.canvas.src_dir, self.canvas.align_out, self.canvas.crop_out):
                     if d and d.exists():
                         tops.append(str(d))
                 if tops:
@@ -625,12 +487,7 @@ class MainWindow(QMainWindow):
 
     def _fs_refresh(self):
         cur = self.canvas.current_path()
-        self.canvas.set_paths(
-            self.canvas.base_path,
-            self.canvas.src_dir,
-            self.canvas.align_out,
-            self.canvas.crop_out,
-        )
+        self.canvas.set_paths(self.canvas.base_path, self.canvas.src_dir, self.canvas.align_out, self.canvas.crop_out)
         if cur and cur in self.canvas.files:
             try:
                 self.canvas.idx = self.canvas.files.index(cur)
@@ -640,7 +497,7 @@ class MainWindow(QMainWindow):
         self._update_watchers()
         self._highlight_current_in_sidebar()
 
-    # ---------- NEW: highlight helper ----------
+    # ---------- highlight helper ----------
 
     def _highlight_current_in_sidebar(self):
         """Select the current moving image in the Source tree."""

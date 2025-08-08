@@ -5,10 +5,9 @@ from typing import Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
-from PyQt5.QtCore import Qt, QRect, QPoint, QSize, pyqtSignal  # <-- add pyqtSignal
+from PyQt5.QtCore import Qt, QRect, QPoint, QSize, pyqtSignal
 from PyQt5.QtGui import QPainter, QPen, QColor, QPixmap
 from PyQt5.QtWidgets import QWidget, QMessageBox, QRubberBand
-from PyQt5.QtWidgets import QInputDialog
 
 from align_app.utils.img_io import (
     load_image_bgr,
@@ -24,7 +23,7 @@ class AlignCanvas(QWidget):
 
     gap = 8  # gap between left/right panels in widget (draw space)
 
-    # NEW: notify when the “current” moving image changes
+    # notify when the “current” moving image changes
     currentPathChanged = pyqtSignal(object)  # emits Path or None
 
     def __init__(self, parent=None):
@@ -45,32 +44,41 @@ class AlignCanvas(QWidget):
         self.cache_prev: Dict[Path, np.ndarray] = {}
 
         # Preview sizing (canonical preview scale & size)
-        self.s: float = 1.0
-        self.pw: int = 0
-        self.ph: int = 0
+        self.s: float = 1.0  # preview scale relative to full-res
+        self.pw: int = 0  # preview width (canonical)
+        self.ph: int = 0  # preview height (canonical)
 
         # Draw sizing (dynamic per paint to fit the widget)
-        self.ds: float = 1.0
-        self.tw: int = 0
-        self.th: int = 0
+        self.ds: float = 1.0  # extra draw scale applied to preview
+        self.tw: int = 0  # drawn panel width  = int(pw * ds)
+        self.th: int = 0  # drawn panel height = int(ph * ds)
 
-        # Per-image params (preview-space)
-        self.params: Dict[Path, Dict[str, float]] = {}
+        # Per-image params (preview-space; i.e., before applying ds)
+        # For each path -> dict:
+        #   mode: 'affine' or 'persp'
+        #   tx, ty, theta, scale   (affine)
+        #   corners: Optional[np.ndarray shape (4,2) in preview coords] (persp)
+        self.params: Dict[Path, Dict[str, object]] = {}
         self.idx: int = 0
 
         # UI state
         self.alpha = 0.5
-        self.step = 1.0
-        self.rot_step = 0.10
-        self.scale_step = 0.005
-        self.micro_scale_step = 0.001
+        self.step = 1.0  # MOVE step (px in preview space)
+        self.rot_step = 0.10  # degrees per tick
+        self.scale_step = 0.005  # 0.5% zoom
+        self.micro_scale_step = 0.001  # 0.1% zoom
         self.grid_on = True
-        self.grid_step = 40
+        self.grid_step = 40  # in preview px
         self.overlay_mode = False
         self.show_outline = True
 
+        # Perspective controls (preview space)
+        self.corner_idx = 0  # 0..3 (tl,tr,br,bl)
+        self.corner_step = 2.0
+        self.corner_micro_step = 0.5
+
         # Hover & drag
-        self.hover_cell: Optional[Tuple[int, int, int, int]] = None
+        self.hover_cell: Optional[Tuple[int, int, int, int]] = None  # in DRAW coords
         self.dragging = False
         self.drag_last: Optional[QPoint] = None
 
@@ -78,8 +86,8 @@ class AlignCanvas(QWidget):
         self.crop_mode = False
         self.rubber = QRubberBand(QRubberBand.Rectangle, self)
         self.crop_origin: Optional[QPoint] = None
-        self.crop_rect_px: Optional[QRect] = None
-        self.crop_from_aligned: bool = True
+        self.crop_rect_px: Optional[QRect] = None  # in WIDGET/DRAW coords on base
+        self.crop_from_aligned: bool = True  # True = crop only aligned PNGs
 
         # Cached rects for hit-testing
         self.left_rect = QRect()
@@ -95,6 +103,7 @@ class AlignCanvas(QWidget):
         crop_out: Optional[Path],
         preview_max_side: int = 1600,
     ):
+        """Set any subset of paths; load/reload when enough info is present."""
         if base_path is not None:
             self.base_path = base_path
         if src_dir is not None:
@@ -128,9 +137,16 @@ class AlignCanvas(QWidget):
                 ),
                 key=lambda p: str(p).lower(),
             )
-            # reset params for new files
+            # reset params for new files (lazy-init corners when needed)
             self.params = {
-                p: {"tx": 0.0, "ty": 0.0, "theta": 0.0, "scale": 1.0}
+                p: {
+                    "mode": "affine",
+                    "tx": 0.0,
+                    "ty": 0.0,
+                    "theta": 0.0,
+                    "scale": 1.0,
+                    "corners": None,
+                }
                 for p in self.files
             }
             self.idx = 0
@@ -138,7 +154,6 @@ class AlignCanvas(QWidget):
 
         # notify current file (may be None)
         self.currentPathChanged.emit(self.current_path())
-
         self.update()
 
     def prev_image(self):
@@ -146,7 +161,7 @@ class AlignCanvas(QWidget):
             return
         if self.idx > 0:
             self.idx -= 1
-            self.currentPathChanged.emit(self.current_path())  # NEW
+            self.currentPathChanged.emit(self.current_path())
             self.update()
 
     def next_image(self):
@@ -154,16 +169,20 @@ class AlignCanvas(QWidget):
             return
         if self.idx < len(self.files) - 1:
             self.idx += 1
-            self.currentPathChanged.emit(self.current_path())  # NEW
+            self.currentPathChanged.emit(self.current_path())
             self.update()
 
     def move_dxdy(self, dx: float, dy: float):
+        """Toolbar nudges. In perspective mode, nudge selected corner; else translate."""
         path = self.current_path()
         if not path:
             return
         p = self.params[path]
-        p["tx"] += dx
-        p["ty"] += dy
+        if p["mode"] == "persp":
+            self._nudge_corner(dx, dy, micro=False)
+        else:
+            p["tx"] = float(p["tx"]) + dx
+            p["ty"] = float(p["ty"]) + dy
         self.update()
 
     def rotate_deg(self, dtheta: float):
@@ -171,7 +190,10 @@ class AlignCanvas(QWidget):
         if not path:
             return
         p = self.params[path]
-        p["theta"] += dtheta
+        if p["mode"] == "persp":
+            # ignore rotate in perspective mode (keeps things simple)
+            return
+        p["theta"] = float(p["theta"]) + dtheta
         self.update()
 
     def zoom_factor(self, mul: float):
@@ -179,7 +201,10 @@ class AlignCanvas(QWidget):
         if not path:
             return
         p = self.params[path]
-        p["scale"] = clamp(p["scale"] * mul, 0.8, 1.2)
+        if p["mode"] == "persp":
+            # ignore zoom in perspective mode
+            return
+        p["scale"] = clamp(float(p["scale"]) * mul, 0.8, 1.2)
         self.update()
 
     def reset_current(self):
@@ -190,6 +215,8 @@ class AlignCanvas(QWidget):
         p["tx"] = p["ty"] = 0.0
         p["theta"] = 0.0
         p["scale"] = 1.0
+        p["mode"] = "affine"
+        p["corners"] = None
         self.update()
 
     def save_current_aligned(self):
@@ -204,23 +231,39 @@ class AlignCanvas(QWidget):
             return
         mov_prev = self._get_preview(path)
         p = self.params[path]
-        M_small = self._params_to_matrix_small(mov_prev, p)
-        M_full = self._lift_small_to_full(M_small)
         img_full = load_image_bgr(str(path))
         bw, bh = self.base_full.shape[1], self.base_full.shape[0]
-        out = cv2.warpAffine(
-            img_full,
-            M_full,
-            (bw, bh),
-            flags=cv2.INTER_LINEAR,
-            borderMode=cv2.BORDER_CONSTANT,
-            borderValue=(0, 0, 0),
-        )
+
+        if p["mode"] == "persp":
+            H_small = self._params_to_homography_small(mov_prev, p)
+            H_full = self._lift_homography_small_to_full(H_small)
+            out = cv2.warpPerspective(
+                img_full,
+                H_full,
+                (bw, bh),
+                flags=cv2.INTER_LINEAR,
+                borderMode=cv2.BORDER_CONSTANT,
+                borderValue=(0, 0, 0),
+            )
+        else:
+            M_small = self._params_to_matrix_small(mov_prev, p)
+            M_full = self._lift_small_to_full(M_small)
+            out = cv2.warpAffine(
+                img_full,
+                M_full,
+                (bw, bh),
+                flags=cv2.INTER_LINEAR,
+                borderMode=cv2.BORDER_CONSTANT,
+                borderValue=(0, 0, 0),
+            )
+
         out_path = self.align_out / f"{path.stem}.png"
         cv2.imwrite(str(out_path), out)
         QMessageBox.information(self, "Saved", f"Aligned -> {out_path}")
 
-    def start_crop_mode(self):
+    def start_crop_mode(self, use_aligned: Optional[bool] = None):
+        """Begin crop rectangle interaction. If use_aligned is given,
+        True => crop only aligned pngs, False => crop original sources."""
         if self.base_full is None:
             return
         if not self.crop_out:
@@ -229,18 +272,8 @@ class AlignCanvas(QWidget):
             )
             return
 
-        # Ask user for crop target type
-        choice, ok = QInputDialog.getItem(
-            self,
-            "Crop Target",
-            "Crop from:",
-            ["Aligned images", "Source images"],
-            0,  # default index
-            False,
-        )
-        if not ok:
-            return
-        self.crop_from_aligned = choice == "Aligned images"
+        if use_aligned is not None:
+            self.crop_from_aligned = bool(use_aligned)
 
         self.crop_mode = True
         self.crop_origin = None
@@ -276,15 +309,46 @@ class AlignCanvas(QWidget):
         self.cache_prev[path] = prev
         return prev
 
+    def _ensure_corners(self, mov_prev: np.ndarray, p: Dict[str, object]) -> np.ndarray:
+        """Lazy init corners from current affine transform (preview space)."""
+        if p.get("corners") is not None:
+            return p["corners"]  # type: ignore[return-value]
+        h, w = mov_prev.shape[:2]
+        src = np.float32(
+            [[0, 0], [w - 1, 0], [w - 1, h - 1], [0, h - 1]]
+        )  # tl,tr,br,bl
+        M = self._params_to_matrix_small(mov_prev, p)
+        M3 = np.vstack([M, [0, 0, 1]]).astype(np.float32)
+        dst = cv2.perspectiveTransform(src.reshape(-1, 1, 2), M3).reshape(4, 2)
+        p["corners"] = dst.astype(np.float32)
+        return p["corners"]  # type: ignore[return-value]
+
     def _params_to_matrix_small(
-        self, mov_prev: np.ndarray, p: Dict[str, float]
+        self, mov_prev: np.ndarray, p: Dict[str, object]
     ) -> np.ndarray:
+        """2x3 affine (preview space)"""
         h, w = mov_prev.shape[:2]
         cx, cy = w / 2.0, h / 2.0
-        M = cv2.getRotationMatrix2D((cx, cy), p["theta"], p["scale"])
-        M[0, 2] += p["tx"]
-        M[1, 2] += p["ty"]
+        theta = float(p["theta"])
+        scale = float(p["scale"])
+        tx = float(p["tx"])
+        ty = float(p["ty"])
+        M = cv2.getRotationMatrix2D((cx, cy), theta, scale)
+        M[0, 2] += tx
+        M[1, 2] += ty
         return M
+
+    def _params_to_homography_small(
+        self, mov_prev: np.ndarray, p: Dict[str, object]
+    ) -> np.ndarray:
+        """3x3 perspective H (preview space) using p['corners'] as dst"""
+        h, w = mov_prev.shape[:2]
+        src = np.float32(
+            [[0, 0], [w - 1, 0], [w - 1, h - 1], [0, h - 1]]
+        )  # tl,tr,br,bl
+        dst = self._ensure_corners(mov_prev, p).astype(np.float32)
+        H = cv2.getPerspectiveTransform(src, dst)
+        return H
 
     def _lift_small_to_full(self, M_small: np.ndarray) -> np.ndarray:
         # Lift preview-space affine to full-res affine
@@ -295,10 +359,50 @@ class AlignCanvas(QWidget):
         W = S_inv @ A @ S
         return W[:2, :]
 
+    def _lift_homography_small_to_full(self, H_small: np.ndarray) -> np.ndarray:
+        # H_full = S^{-1} * H_small * S
+        S = np.diag([self.s, self.s, 1.0]).astype(np.float32)
+        S_inv = np.diag([1.0 / self.s, 1.0 / self.s, 1.0]).astype(np.float32)
+        return S_inv @ H_small @ S
+
     def _compose_right_preview(
-        self, mov_prev: np.ndarray, M_small: np.ndarray
+        self, mov_prev: np.ndarray, p: Dict[str, object]
     ) -> np.ndarray:
-        # Warp at PREVIEW size (pw,ph)
+        """Return preview composite for right panel based on current mode."""
+        if p["mode"] == "persp":
+            H = self._params_to_homography_small(mov_prev, p)
+            warped = cv2.warpPerspective(
+                mov_prev,
+                H,
+                (self.pw, self.ph),
+                flags=cv2.INTER_LINEAR,
+                borderMode=cv2.BORDER_CONSTANT,
+                borderValue=(0, 0, 0),
+            )
+            comp = warped
+            if self.overlay_mode and self.base_prev is not None:
+                base = self.base_prev.copy()
+                mask = (warped > 0).any(axis=2).astype(np.uint8) * 255
+                mask3 = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
+                comp = np.where(
+                    mask3 > 0,
+                    cv2.addWeighted(base, 1 - self.alpha, warped, self.alpha, 0),
+                    base,
+                )
+
+            if self.show_outline:
+                h, w = mov_prev.shape[:2]
+                src = np.float32([[0, 0], [w - 1, 0], [w - 1, h - 1], [0, h - 1]])
+                tc = (
+                    cv2.perspectiveTransform(src.reshape(-1, 1, 2), H)
+                    .astype(int)
+                    .reshape(-1, 2)
+                )
+                cv2.polylines(comp, [tc], True, (0, 255, 255), 1, cv2.LINE_AA)
+            return comp
+
+        # affine path
+        M_small = self._params_to_matrix_small(mov_prev, p)
         warped = cv2.warpAffine(
             mov_prev,
             M_small,
@@ -326,7 +430,6 @@ class AlignCanvas(QWidget):
             M3 = np.vstack([M_small, [0, 0, 1]]).astype(np.float32)
             tc = cv2.perspectiveTransform(corners, M3).astype(int).reshape(-1, 2)
             cv2.polylines(comp, [tc], True, (0, 255, 255), 1, cv2.LINE_AA)
-
         return comp
 
     # ---- painting / events ----
@@ -374,12 +477,12 @@ class AlignCanvas(QWidget):
 
         # Right (moving) if any file exists
         right_img = None
+        cur_params = None
         if self.have_files():
             path = self.current_path()
             mov_prev = self._get_preview(path)
-            params = self.params[path]
-            M_small = self._params_to_matrix_small(mov_prev, params)
-            right_bgr = self._compose_right_preview(mov_prev, M_small)
+            cur_params = self.params[path]
+            right_bgr = self._compose_right_preview(mov_prev, cur_params)
             if self.ds != 1.0:
                 right_bgr = cv2.resize(
                     right_bgr, (self.tw, self.th), interpolation=cv2.INTER_AREA
@@ -396,6 +499,25 @@ class AlignCanvas(QWidget):
 
         if right_img is not None:
             p.drawPixmap(right_rect, right_img)
+            # If perspective mode, draw corner handles
+            if cur_params is not None and cur_params["mode"] == "persp":
+                mov_prev = self._get_preview(self.current_path())
+                corners = self._ensure_corners(mov_prev, cur_params).astype(float)
+                # scale to draw coords and offset to right panel
+                for i, (cx, cy) in enumerate(corners):
+                    dx = int(round(cx * self.ds)) + right_rect.left()
+                    dy = int(round(cy * self.ds)) + right_rect.top()
+                    pen = QPen(
+                        (
+                            QColor(255, 0, 0)
+                            if i == self.corner_idx
+                            else QColor(0, 255, 0)
+                        ),
+                        2,
+                        Qt.SolidLine,
+                    )
+                    p.setPen(pen)
+                    p.drawEllipse(QPoint(dx, dy), 4, 4)
         else:
             # Placeholder on the right
             p.fillRect(right_rect, QColor(40, 40, 40))
@@ -447,7 +569,7 @@ class AlignCanvas(QWidget):
         else:
             self.hover_cell = None
 
-        # Drag pan on right panel (convert draw delta -> preview delta)
+        # Drag pan on right panel (convert draw delta -> preview delta) — only in affine mode
         if self.dragging and self.drag_last is not None and self.have_files():
             dx_draw = pos.x() - self.drag_last.x()
             dy_draw = pos.y() - self.drag_last.y()
@@ -456,8 +578,12 @@ class AlignCanvas(QWidget):
             path = self.current_path()
             if path:
                 pr = self.params[path]
-                pr["tx"] += dx_prev
-                pr["ty"] += dy_prev
+                if pr["mode"] == "persp":
+                    # drag in persp mode moves selected corner
+                    self._nudge_corner(dx_prev, dy_prev, micro=False)
+                else:
+                    pr["tx"] = float(pr["tx"]) + dx_prev
+                    pr["ty"] = float(pr["ty"]) + dy_prev
             self.drag_last = pos
             self.update()
 
@@ -511,42 +637,80 @@ class AlignCanvas(QWidget):
 
     def keyPressEvent(self, evt):
         path = self.current_path()
+        key = evt.key()
+
+        # allow toggles even without a moving image
         if path is None:
-            # allow toggles even without a moving image
-            key = evt.key()
             if key == Qt.Key_G:
                 self.grid_on = not self.grid_on
                 self.update()
             return
 
         p = self.params[path]
-        key = evt.key()
+        shift = bool(evt.modifiers() & Qt.ShiftModifier)
+        amt = self.corner_micro_step if shift else self.corner_step
 
+        # Mode toggle
+        if key == Qt.Key_P:
+            p["mode"] = "persp" if p["mode"] == "affine" else "affine"
+            self.update()
+            return
+
+        # Corner select
+        if key in (Qt.Key_1, Qt.Key_2, Qt.Key_3, Qt.Key_4):
+            self.corner_idx = {Qt.Key_1: 0, Qt.Key_2: 1, Qt.Key_3: 2, Qt.Key_4: 3}[key]
+            self.update()
+            return
+
+        if p["mode"] == "persp":
+            # Arrow keys nudge selected corner
+            if key in (Qt.Key_Left, Qt.Key_A):
+                self._nudge_corner(-amt, 0, micro=shift)
+            elif key in (Qt.Key_Right, Qt.Key_D):
+                self._nudge_corner(+amt, 0, micro=shift)
+            elif key in (Qt.Key_Up, Qt.Key_W):
+                self._nudge_corner(0, -amt, micro=shift)
+            elif key in (Qt.Key_Down, Qt.Key_S):
+                self._nudge_corner(0, +amt, micro=shift)
+            elif key == Qt.Key_0:
+                # reset corners from current affine
+                mov_prev = self._get_preview(path)
+                p["corners"] = None
+                self._ensure_corners(mov_prev, p)
+            # other keys (rotate/zoom) are ignored in persp mode
+            self.update()
+            return
+
+        # ----- affine controls (existing) -----
         # Move (Arrows + WASD) – step is in PREVIEW pixels
         if key in (Qt.Key_Left, Qt.Key_A):
-            p["tx"] -= self.step
+            p["tx"] = float(p["tx"]) - self.step
         elif key in (Qt.Key_Right, Qt.Key_D):
-            p["tx"] += self.step
+            p["tx"] = float(p["tx"]) + self.step
         elif key in (Qt.Key_Up, Qt.Key_W):
-            p["ty"] -= self.step
+            p["ty"] = float(p["ty"]) - self.step
         elif key in (Qt.Key_Down, Qt.Key_S):
-            p["ty"] += self.step
+            p["ty"] = float(p["ty"]) + self.step
 
         # Rotate
         elif key == Qt.Key_BracketLeft:
-            p["theta"] -= self.rot_step
+            p["theta"] = float(p["theta"]) - self.rot_step
         elif key == Qt.Key_BracketRight:
-            p["theta"] += self.rot_step
+            p["theta"] = float(p["theta"]) + self.rot_step
 
         # Zoom
         elif key == Qt.Key_Comma:
-            p["scale"] = clamp(p["scale"] * (1.0 - self.scale_step), 0.8, 1.2)
+            p["scale"] = clamp(float(p["scale"]) * (1.0 - self.scale_step), 0.8, 1.2)
         elif key == Qt.Key_Period:
-            p["scale"] = clamp(p["scale"] * (1.0 + self.scale_step), 0.8, 1.2)
+            p["scale"] = clamp(float(p["scale"]) * (1.0 + self.scale_step), 0.8, 1.2)
         elif key == Qt.Key_Z:
-            p["scale"] = clamp(p["scale"] * (1.0 - self.micro_scale_step), 0.8, 1.2)
+            p["scale"] = clamp(
+                float(p["scale"]) * (1.0 - self.micro_scale_step), 0.8, 1.2
+            )
         elif key == Qt.Key_X:
-            p["scale"] = clamp(p["scale"] * (1.0 + self.micro_scale_step), 0.8, 1.2)
+            p["scale"] = clamp(
+                float(p["scale"]) * (1.0 + self.micro_scale_step), 0.8, 1.2
+            )
 
         # Step
         elif key == Qt.Key_Equal:
@@ -572,7 +736,7 @@ class AlignCanvas(QWidget):
         elif key in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_S):
             self.save_current_aligned()
 
-        # Crop mode start (defaults to previous choice)
+        # Crop mode start (uses last chosen target)
         elif key == Qt.Key_C:
             self.start_crop_mode()
 
@@ -618,7 +782,6 @@ class AlignCanvas(QWidget):
         base_crop = self.base_full[cy : cy + ch, cx : cx + cw]
         cv2.imwrite(str((self.crop_out / f"{self.base_path.stem}.png")), base_crop)
 
-        # Each image: choose source based on self.crop_from_aligned
         # Decide file list based on target choice
         if self.crop_from_aligned:
             file_list = list(self.align_out.glob("*.png")) if self.align_out else []
@@ -644,19 +807,46 @@ class AlignCanvas(QWidget):
             f"Cropped {'aligned' if self.crop_from_aligned else 'source'} images -> {self.crop_out}",
         )
 
+    # ---- perspective helpers ----
+    def _nudge_corner(self, dx: float, dy: float, micro: bool):
+        """Move selected corner in preview space."""
+        path = self.current_path()
+        if not path:
+            return
+        p = self.params[path]
+        mov_prev = self._get_preview(path)
+        corners = self._ensure_corners(mov_prev, p)
+        i = int(self.corner_idx) % 4
+        corners[i, 0] += float(dx)
+        corners[i, 1] += float(dy)
+        p["corners"] = corners
+        self.update()
+
     def _warp_full_from_params(self, path: Path) -> np.ndarray:
         mov_prev = self._get_preview(path)
         p = self.params[path]
-        M_small = self._params_to_matrix_small(mov_prev, p)
         img_full = load_image_bgr(str(path))
         bw, bh = self.base_full.shape[1], self.base_full.shape[0]
-        M_full = self._lift_small_to_full(M_small)
-        out = cv2.warpAffine(
-            img_full,
-            M_full,
-            (bw, bh),
-            flags=cv2.INTER_LINEAR,
-            borderMode=cv2.BORDER_CONSTANT,
-            borderValue=(0, 0, 0),
-        )
+        if p["mode"] == "persp":
+            H_small = self._params_to_homography_small(mov_prev, p)
+            H_full = self._lift_homography_small_to_full(H_small)
+            out = cv2.warpPerspective(
+                img_full,
+                H_full,
+                (bw, bh),
+                flags=cv2.INTER_LINEAR,
+                borderMode=cv2.BORDER_CONSTANT,
+                borderValue=(0, 0, 0),
+            )
+        else:
+            M_small = self._params_to_matrix_small(mov_prev, p)
+            M_full = self._lift_small_to_full(M_small)
+            out = cv2.warpAffine(
+                img_full,
+                M_full,
+                (bw, bh),
+                flags=cv2.INTER_LINEAR,
+                borderMode=cv2.BORDER_CONSTANT,
+                borderValue=(0, 0, 0),
+            )
         return out

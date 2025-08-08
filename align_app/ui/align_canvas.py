@@ -8,6 +8,7 @@ import numpy as np
 from PyQt5.QtCore import Qt, QRect, QPoint, QSize, pyqtSignal  # <-- add pyqtSignal
 from PyQt5.QtGui import QPainter, QPen, QColor, QPixmap
 from PyQt5.QtWidgets import QWidget, QMessageBox, QRubberBand
+from PyQt5.QtWidgets import QInputDialog
 
 from align_app.utils.img_io import (
     load_image_bgr,
@@ -219,7 +220,7 @@ class AlignCanvas(QWidget):
         cv2.imwrite(str(out_path), out)
         QMessageBox.information(self, "Saved", f"Aligned -> {out_path}")
 
-    def start_crop_mode(self, use_aligned: Optional[bool] = None):
+    def start_crop_mode(self):
         if self.base_full is None:
             return
         if not self.crop_out:
@@ -227,17 +228,27 @@ class AlignCanvas(QWidget):
                 self, "Missing path", "Please set Crops Out folder in the toolbar."
             )
             return
-        if use_aligned is not None:
-            self.crop_from_aligned = bool(use_aligned)
+
+        # Ask user for crop target type
+        choice, ok = QInputDialog.getItem(
+            self,
+            "Crop Target",
+            "Crop from:",
+            ["Aligned images", "Source images"],
+            0,  # default index
+            False,
+        )
+        if not ok:
+            return
+        self.crop_from_aligned = choice == "Aligned images"
+
         self.crop_mode = True
         self.crop_origin = None
         self.rubber.hide()
-        src = "ALIGNED images" if self.crop_from_aligned else "ORIGINAL source images"
         QMessageBox.information(
             self,
             "Crop",
-            "Drag a rectangle on the BASE (left) panel.\n"
-            f"Release mouse to crop {src}.",
+            "Drag a rectangle on the BASE (left) panel.\n" "Release mouse to confirm.",
         )
 
     # ---- internals ----
@@ -252,7 +263,6 @@ class AlignCanvas(QWidget):
         if not self.files:
             return None
         return self.files[self.idx]
-
 
     def _get_preview(self, path: Path) -> np.ndarray:
         if path in self.cache_prev:
@@ -609,22 +619,24 @@ class AlignCanvas(QWidget):
         cv2.imwrite(str((self.crop_out / f"{self.base_path.stem}.png")), base_crop)
 
         # Each image: choose source based on self.crop_from_aligned
-        for pth in self.files:
+        # Decide file list based on target choice
+        if self.crop_from_aligned:
+            file_list = list(self.align_out.glob("*.png")) if self.align_out else []
+        else:
+            file_list = self.files  # source images
+
+        for pth in file_list:
             if self.crop_from_aligned:
-                # Use saved aligned PNG if present, else warp from params
-                img = None
-                if self.align_out:
-                    cand = self.align_out / f"{pth.stem}.png"
-                    if cand.exists():
-                        img = cv2.imread(str(cand), cv2.IMREAD_COLOR)
+                img = cv2.imread(str(pth), cv2.IMREAD_COLOR)
                 if img is None:
-                    img = self._warp_full_from_params(pth)
+                    continue  # skip unreadable
+                out_name = pth.name
             else:
-                # Always derive from ORIGINAL source by warping on-the-fly
-                img = self._warp_full_from_params(pth)
+                img = load_image_bgr(str(pth))
+                out_name = f"{pth.stem}.png"
 
             crop = img[cy : cy + ch, cx : cx + cw]
-            cv2.imwrite(str((self.crop_out / f"{pth.stem}.png")), crop)
+            cv2.imwrite(str(self.crop_out / out_name), crop)
 
         QMessageBox.information(
             self,

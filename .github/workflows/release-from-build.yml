@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Tag to create/release (e.g. v0.1.7)"
+        description: "Tag to create/release (e.g. v0.1.9)"
         required: true
       branch:
         description: "Branch to pull artifacts from"
@@ -18,15 +18,13 @@ permissions:
 jobs:
   publish:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      actions: read
     steps:
       - name: Checkout (for tagging)
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
+      # Pull artifacts from your Build workflow (build.yml)
       - name: Download artifacts from last successful Build MicroAlign
         uses: dawidd6/action-download-artifact@v6
         with:
@@ -37,10 +35,15 @@ jobs:
           path: dist
           if_no_artifact_found: fail
 
-      - name: List downloaded
-        run: ls -lah dist || true
+      - name: Flatten artifacts
+        run: |
+          shopt -s globstar nullglob
+          mv dist/**/MicroAlign-macOS.zip dist/ 2>/dev/null || true
+          mv dist/**/MicroAlign-Windows.zip dist/ 2>/dev/null || true
+          mv dist/**/MicroAlign-Linux.tar.gz dist/ 2>/dev/null || true
+          ls -lah dist
 
-      - name: Configure git identity
+      - name: Configure git identity (for creating tag)
         run: |
           git config user.name "${{ github.actor }}"
           git config user.email "${{ github.actor }}@users.noreply.github.com"

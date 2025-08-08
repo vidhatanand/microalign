@@ -8,6 +8,7 @@ on:
 jobs:
   build:
     strategy:
+      fail-fast: false
       matrix:
         os: [macos-latest, windows-latest, ubuntu-latest]
         python-version: ["3.11"]
@@ -25,7 +26,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install pyinstaller PyQt5 opencv-python pillow
 
-      # --- make icons from your xcassets ---
+      # ----- make icons from your xcassets -----
 
       - name: Prepare .icns (macOS)
         if: runner.os == 'macOS'
@@ -45,16 +46,18 @@ jobs:
           rm -rf align_app/assets/icons.iconset
 
       - name: Prepare .ico (all OS)
+        # Force bash so the heredoc works even on Windows
+        shell: bash
         run: |
           python - <<'PY'
           from PIL import Image
-          base = "align_app/assets/AppIcons/Assets.xcassets/AppIcon.appiconset/1024.png"
-          im = Image.open(base).convert("RGBA")
+          p = "align_app/assets/AppIcons/Assets.xcassets/AppIcon.appiconset/1024.png"
+          im = Image.open(p).convert("RGBA")
           sizes = [(256,256),(128,128),(64,64),(48,48),(32,32),(24,24),(16,16)]
           im.save("align_app/assets/microalign.ico", sizes=sizes)
           PY
 
-      # --- build per-OS with icons included ---
+      # ----- build per OS with icons included -----
 
       - name: Build (macOS)
         if: runner.os == 'macOS'
@@ -77,11 +80,11 @@ jobs:
       - name: Build (Linux)
         if: runner.os == 'Linux'
         run: |
-          pyinstaller -w -D --clean -n microalign \
+          pyinstaller -w -D --clean -n MicroAlign \
             --add-data "align_app/assets:align_app/assets" \
             align_app/app.py
 
-      # --- package artifacts ---
+      # ----- package artifacts -----
 
       - name: Package (macOS)
         if: runner.os == 'macOS'
@@ -99,7 +102,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           cd dist
-          tar -czf MicroAlign-Linux.tar.gz microalign
+          tar -czf MicroAlign-Linux.tar.gz MicroAlign
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

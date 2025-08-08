@@ -15,6 +15,7 @@ from align_app.utils.img_io import (
 )
 
 
+
 class AlignCanvas(QWidget):
     """Widget that renders base/current panels and handles manual alignment."""
     gap = 8  # gap between left/right panels in widget (draw space)

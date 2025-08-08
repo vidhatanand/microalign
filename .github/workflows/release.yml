@@ -1,151 +1,85 @@
-name: Release MicroAlign
+name: Publish from last Build
 
 on:
-  push:
-    tags:
-      - 'v*.*.*'
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to create/release (e.g. v0.1.5)"
+        required: true
+      branch:
+        description: "Which branch's last successful Build to use"
+        required: false
+        default: "main"
+      title:
+        description: "Release title (optional, defaults to tag)"
+        required: false
+      notes:
+        description: "Release notes (optional)"
+        required: false
 
 permissions:
-  contents: write
+  contents: write  # needed to create tags & releases
 
 jobs:
-  build:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macos-latest, windows-latest, ubuntu-latest]
-        python-version: ["3.11"]
-    runs-on: ${{ matrix.os }}
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python-version }}
-
-      - name: Install deps
-        run: |
-          python -m pip install --upgrade pip wheel setuptools
-          pip install pyinstaller PyQt5 opencv-python pillow
-
-      # ----- icons -----
-
-      - name: Prepare .icns (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          BASE="align_app/assets/AppIcons/Assets.xcassets/AppIcon.appiconset/1024.png"
-          mkdir -p align_app/assets/icons.iconset
-          sips -z 16 16   "$BASE" --out align_app/assets/icons.iconset/icon_16x16.png
-          sips -z 32 32   "$BASE" --out align_app/assets/icons.iconset/icon_16x16@2x.png
-          sips -z 32 32   "$BASE" --out align_app/assets/icons.iconset/icon_32x32.png
-          sips -z 64 64   "$BASE" --out align_app/assets/icons.iconset/icon_32x32@2x.png
-          sips -z 128 128 "$BASE" --out align_app/assets/icons.iconset/icon_128x128.png
-          sips -z 256 256 "$BASE" --out align_app/assets/icons.iconset/icon_128x128@2x.png
-          sips -z 256 256 "$BASE" --out align_app/assets/icons.iconset/icon_256x256.png
-          sips -z 512 512 "$BASE" --out align_app/assets/icons.iconset/icon_512x512.png
-          cp "$BASE" align_app/assets/icons.iconset/icon_512x512@2x.png
-          iconutil -c icns align_app/assets/icons.iconset -o align_app/assets/microalign.icns
-          rm -rf align_app/assets/icons.iconset
-
-      - name: Prepare .ico (all OS)
-        shell: bash
-        run: |
-          python - <<'PY'
-          from PIL import Image
-          p = "align_app/assets/AppIcons/Assets.xcassets/AppIcon.appiconset/1024.png"
-          im = Image.open(p).convert("RGBA")
-          sizes = [(256,256),(128,128),(64,64),(48,48),(32,32),(24,24),(16,16)]
-          im.save("align_app/assets/microalign.ico", sizes=sizes)
-          PY
-
-      # ----- build -----
-
-      - name: Build (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          pyinstaller -w -D --clean -n MicroAlign \
-            --icon align_app/assets/microalign.icns \
-            --osx-bundle-identifier com.yourco.microalign \
-            --hidden-import PyQt5.sip \
-            --collect-submodules PyQt5 --collect-data PyQt5 \
-            --collect-submodules cv2   --collect-data cv2 \
-            --add-data "align_app/assets:align_app/assets" \
-            align_app/app.py
-
-      - name: Build (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          pyinstaller -w -D --clean -n MicroAlign `
-            --icon align_app\assets\microalign.ico `
-            --hidden-import PyQt5.sip `
-            --collect-submodules PyQt5 --collect-data PyQt5 `
-            --collect-submodules cv2   --collect-data cv2 `
-            --add-data "align_app/assets;align_app/assets" `
-            align_app\app.py
-
-      - name: Build (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          pyinstaller -w -D --clean -n MicroAlign \
-            --hidden-import PyQt5.sip \
-            --collect-submodules PyQt5 --collect-data PyQt5 \
-            --collect-submodules cv2   --collect-data cv2 \
-            --add-data "align_app/assets:align_app/assets" \
-            align_app/app.py
-
-      # ----- package -----
-
-      - name: Package (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          cd dist
-          ditto -c -k --sequesterRsrc --keepParent MicroAlign.app MicroAlign-macOS.zip
-
-      - name: Package (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          Compress-Archive -Path dist\MicroAlign -DestinationPath dist\MicroAlign-Windows.zip
-
-      - name: Package (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          cd dist
-          tar -czf MicroAlign-Linux.tar.gz MicroAlign
-
-      - name: Upload build artifacts (for next job)
-        uses: actions/upload-artifact@v4
-        with:
-          name: bundles-${{ runner.os }}
-          path: |
-            dist/MicroAlign-macOS.zip
-            dist/MicroAlign-Windows.zip
-            dist/MicroAlign-Linux.tar.gz
-          if-no-files-found: ignore
-
   publish:
-    # only publish when this run was triggered by a tag push
-    if: startsWith(github.ref, 'refs/tags/')
-    needs: build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - name: Checkout (for tagging)
+        uses: actions/checkout@v4
         with:
-          pattern: bundles-*
-          merge-multiple: true
+          fetch-depth: 0
+
+      - name: Find last successful 'Build MicroAlign' run on branch
+        id: find
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          BRANCH="${{ inputs.branch }}"
+          # Grab the latest successful run id for the named workflow & branch
+          RUN_ID=$(gh run list \
+            --workflow "Build MicroAlign" \
+            --branch "$BRANCH" \
+            --status success \
+            -L 1 \
+            --json databaseId \
+            -q '.[0].databaseId')
+
+          if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
+            echo "No successful 'Build MicroAlign' run found on branch '$BRANCH'."
+            exit 1
+          fi
+
+          echo "Using Build run-id: $RUN_ID"
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Download artifacts from that build
+        uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ steps.find.outputs.run_id }}
           path: dist
+          merge-multiple: true
+
+      - name: List downloaded payload
+        run: ls -lah dist
+
+      - name: Create tag (if it doesn't already exist)
+        run: |
+          TAG="${{ inputs.tag }}"
+          git fetch --tags
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists. Skipping tag creation."
+          else
+            git tag -a "$TAG" -m "Release $TAG"
+            git push origin "$TAG"
+          fi
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name }}
-          name: MicroAlign ${{ github.ref_name }}
-          draft: false
-          prerelease: false
+          tag_name: ${{ inputs.tag }}
+          name: ${{ inputs.title != '' && inputs.title || inputs.tag }}
+          body: ${{ inputs.notes }}
+          generate_release_notes: true
           files: |
-            dist/MicroAlign-macOS.zip
-            dist/MicroAlign-Windows.zip
-            dist/MicroAlign-Linux.tar.gz
+            dist/*.zip
+            dist/*.tar.gz

@@ -6,7 +6,8 @@ from PyQt5 import QtCore, QtWidgets  # type: ignore
 def row_container(font) -> QtWidgets.QWidget:
     w = QtWidgets.QWidget()
     lay = QtWidgets.QHBoxLayout(w)
-    lay.setContentsMargins(0, 0, 0, 0)
+    # add a touch of right padding so the right group breathes
+    lay.setContentsMargins(0, 0, 12, 0)
     lay.setSpacing(6)
     lay.setAlignment(QtCore.Qt.AlignLeft)
     w.setFont(font)

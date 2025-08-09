@@ -16,11 +16,19 @@ class CanvasInteractMixin:
         self._persp_last: QtCore.QPoint | None = None
         self._persp_start_point: QtCore.QPoint | None = None
 
+    def _is_persp_editing(self) -> bool:
+        # Back-compat: fall back to old attribute name if present
+        return bool(
+            getattr(
+                self, "perspective_editing", getattr(self, "perspective_mode", False)
+            )
+        )
+
     # ---- events ----
     def mouseMoveEvent(self, evt: QtGui.QMouseEvent) -> None:  # noqa: N802
         pos = evt.pos()
 
-        # View panning (hand tool) => shift image content inside fixed frames
+        # View panning (hand tool)
         if (
             self.pan_mode
             and not self.crop_mode
@@ -36,7 +44,7 @@ class CanvasInteractMixin:
 
         # Perspective drag (right panel)
         if (
-            self.perspective_editing
+            self._is_persp_editing()
             and self._persp_dragging
             and self._persp_last is not None
         ):
@@ -59,18 +67,13 @@ class CanvasInteractMixin:
             self.update()
             return
 
-        # Hover cell (base panel only) – align with grid phase (locked to content)
+        # Hover cell (base panel only)
         if self.left_rect.contains(pos):
             step_draw = max(1, int(round(self.grid_step * self.ds)))
             px = pos.x() - self.left_rect.x()
             py = pos.y() - self.left_rect.y()
-            # grid phase due to view pan
-            ox = int(round(self.view_pan_xp * self.ds))
-            oy = int(round(self.view_pan_yp * self.ds))
-            phase_x = (-ox) % step_draw
-            phase_y = (-oy) % step_draw
-            gx0 = ((px - phase_x) // step_draw) * step_draw + phase_x
-            gy0 = ((py - phase_y) // step_draw) * step_draw + phase_y
+            gx0 = (px // step_draw) * step_draw
+            gy0 = (py // step_draw) * step_draw
             gx1 = min(gx0 + step_draw, self.tw - 1)
             gy1 = min(gy0 + step_draw, self.th - 1)
             self.hover_cell = (int(gx0), int(gy0), int(gx1), int(gy1))
@@ -83,7 +86,7 @@ class CanvasInteractMixin:
             and self.drag_last is not None
             and self.have_files()
             and not self.crop_mode
-            and not self.perspective_editing
+            and not self._is_persp_editing()
             and not self.pan_mode
         ):
             dx_draw = pos.x() - self.drag_last.x()
@@ -128,7 +131,7 @@ class CanvasInteractMixin:
             and self.right_rect.contains(pos)
             and not self.crop_mode
             and self.have_files()
-            and not self.perspective_editing
+            and not self._is_persp_editing()
             and not self.pan_mode
         ):
             self.dragging = True
@@ -139,7 +142,7 @@ class CanvasInteractMixin:
         # Begin perspective drag on right (choose nearest corner)
         if (
             evt.button() == QtCore.Qt.LeftButton
-            and self.perspective_editing
+            and self._is_persp_editing()
             and self.right_rect.contains(pos)
             and self.have_files()
         ):
@@ -150,11 +153,6 @@ class CanvasInteractMixin:
                 quad = p["persp"]  # type: ignore[index]
                 mx = pos.x() - self.right_rect.x()
                 my = pos.y() - self.right_rect.y()
-                # adjust for view pan & zoom
-                ox = int(round(self.view_pan_xp * self.ds))
-                oy = int(round(self.view_pan_yp * self.ds))
-                mx += ox
-                my += oy
                 best_i = None
                 best_d2 = None
                 for i, (qx, qy) in enumerate(quad):
@@ -164,8 +162,8 @@ class CanvasInteractMixin:
                     if best_d2 is None or d2 < best_d2:
                         best_d2 = d2
                         best_i = i
-                # 16px pick radius (in draw pixels)
-                if best_d2 is not None and best_d2 <= 16 * 16:
+                # Larger pick radius (18px) in draw pixels
+                if best_d2 is not None and best_d2 <= 18 * 18:
                     self.set_active_corner(int(best_i))
                     self._persp_dragging = True
                     self._persp_last = pos
@@ -237,36 +235,19 @@ class CanvasInteractMixin:
             self.set_pan_mode(not self.pan_mode)
             return
 
+        if key == QtCore.Qt.Key_P:
+            # Toggle editing state (warp persists either way)
+            cur = getattr(
+                self, "perspective_editing", getattr(self, "perspective_mode", False)
+            )
+            # Direct call avoids Pylint E1102 (not-callable) on a local alias
+            self.set_perspective_editing(not cur)  # type: ignore[attr-defined]
+            return
+
         if path is None:
             return
 
-        if key == QtCore.Qt.Key_P:
-            self.set_perspective_editing(not self.perspective_editing)
-            return
-
-        if key == QtCore.Qt.Key_C:
-            self.start_crop_mode(None)
-            return
-
-        # Corner select (1..4) while in perspective
-        if self.perspective_editing and key in (
-            QtCore.Qt.Key_1,
-            QtCore.Qt.Key_2,
-            QtCore.Qt.Key_3,
-            QtCore.Qt.Key_4,
-        ):
-            self.set_active_corner(
-                {
-                    QtCore.Qt.Key_1: 0,
-                    QtCore.Qt.Key_2: 1,
-                    QtCore.Qt.Key_3: 2,
-                    QtCore.Qt.Key_4: 3,
-                }[key]
-            )
-            self.update()
-            return
-
-        if not self.perspective_editing:
+        if not self._is_persp_editing():
             if key in (QtCore.Qt.Key_Left, QtCore.Qt.Key_A):
                 self.move_dxdy(-self.step, 0)
             elif key in (QtCore.Qt.Key_Right, QtCore.Qt.Key_D):

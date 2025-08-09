@@ -20,7 +20,7 @@ from .canvas_affine import (
 )
 from .canvas_perspective import (
     ensure_perspective_quad,
-    perspective_warp_full,
+    perspective_with_affine_warp_full,
 )
 
 
@@ -56,8 +56,8 @@ class CanvasModelMixin:
         self._hist: Dict[Path, List[Dict[str, object]]] = {}
         self._hist_idx: Dict[Path, int] = {}
 
-        # Perspective editing flag (warp persists even when False)
-        self.perspective_editing: bool = False
+        # Perspective editing flag (warp persists even when editing is off)
+        self.perspective_editing = False
         self.active_corner = 0  # 0..3 when perspective is active
 
         # UI state
@@ -74,7 +74,7 @@ class CanvasModelMixin:
         self.show_outline = True
 
     # ---- signals hooks (overridden by AlignCanvas) ----
-    def _on_mode_changed(self, _is_persp: bool) -> None:
+    def _on_mode_changed(self, _is_persp_editing: bool) -> None:
         pass
 
     def _on_active_corner_changed(self, _idx: int) -> None:
@@ -246,7 +246,7 @@ class CanvasModelMixin:
             self.idx -= 1
             self.update()
 
-    # ---- perspective helpers ----
+    # ---- perspective / affine helpers ----
     def _is_default_quad(self, quad) -> bool:
         default = [
             (0.0, 0.0),
@@ -262,37 +262,39 @@ class CanvasModelMixin:
                 return False
         return True
 
-    def _seed_perspective_from_affine(self, path: Path) -> None:
-        """Create a quad from current affine if the quad is still default."""
-        p = self.params[path]
-        ensure_perspective_quad(p, self.pw, self.ph)
-        quad = p["persp"]  # type: ignore[index]
-        if self._is_default_quad(quad):
-            mov_prev = self._get_preview(path)
-            m_small = affine_params_to_small(mov_prev, p)
-            h, w = mov_prev.shape[:2]
-            corners = np.float32(
-                [[0, 0], [w - 1, 0], [w - 1, h - 1], [0, h - 1]]
-            ).reshape(-1, 1, 2)
-            tc = cv2.transform(corners, m_small).reshape(-1, 2)
-            p["persp"] = [(float(x), float(y)) for (x, y) in tc]
+    def _has_active_perspective(self, p: Dict[str, object]) -> bool:
+        return (
+            "persp" in p
+            and isinstance(p["persp"], list)
+            and not self._is_default_quad(p["persp"])
+        )
 
-    def set_perspective_editing(self, editing: bool) -> None:
-        """Toggle editing UI for perspective; warp persists even when False."""
-        editing = bool(editing)
-        if self.perspective_editing == editing:
+    def set_perspective_editing(self, enabled: bool) -> None:
+        enabled = bool(enabled)
+        if self.perspective_editing == enabled:
             return
-        self.perspective_editing = editing
-        if editing:
+        self.perspective_editing = enabled
+        if enabled:
             path = self.current_path()
             if path:
-                self._seed_perspective_from_affine(path)
+                p = self.params[path]
+                ensure_perspective_quad(p, self.pw, self.ph)
+                quad = p["persp"]  # type: ignore[index]
+                if self._is_default_quad(quad):
+                    mov_prev = self._get_preview(path)
+                    m_small = affine_params_to_small(mov_prev, p)
+                    h, w = mov_prev.shape[:2]
+                    corners = np.float32(
+                        [[0, 0], [w - 1, 0], [w - 1, h - 1], [0, h - 1]]
+                    ).reshape(-1, 1, 2)
+                    tc = cv2.transform(corners, m_small).reshape(-1, 2)
+                    p["persp"] = [(float(x), float(y)) for (x, y) in tc]
         self._on_mode_changed(self.perspective_editing)
         self.update()
 
-    # Back-compat shim (older callers)
+    # Back-compat for older callers
     def set_perspective_mode(self, enabled: bool) -> None:
-        self.set_perspective_editing(bool(enabled))
+        self.set_perspective_editing(enabled)
 
     def set_active_corner(self, idx: int) -> None:
         idx = int(max(0, min(3, idx)))
@@ -301,16 +303,8 @@ class CanvasModelMixin:
             self._on_active_corner_changed(self.active_corner)
             self.update()
 
-    def _has_perspective(self, p: Dict[str, object]) -> bool:
-        q = p.get("persp")
-        return (
-            isinstance(q, list)
-            and len(q) == 4
-            and not self._is_default_quad(q)  # type: ignore[arg-type]
-        )
-
     def move_dxdy(self, dx: float, dy: float) -> None:
-        if not self.have_files() or self.perspective_editing:
+        if not self.have_files():
             return
         path = self.current_path()
         if not path:
@@ -322,7 +316,7 @@ class CanvasModelMixin:
         self.update()
 
     def rotate_deg(self, dtheta: float) -> None:
-        if not self.have_files() or self.perspective_editing:
+        if not self.have_files():
             return
         path = self.current_path()
         if not path:
@@ -333,7 +327,7 @@ class CanvasModelMixin:
         self.update()
 
     def zoom_factor(self, factor: float) -> None:
-        if not self.have_files() or self.perspective_editing:
+        if not self.have_files():
             return
         path = self.current_path()
         if not path:
@@ -371,19 +365,21 @@ class CanvasModelMixin:
         img_full = load_image_bgr(str(path))
         bw, bh = self.base_full.shape[1], self.base_full.shape[0]
 
+        mov_prev = self._get_preview(path)
         p = self.params[path]
-        if self._has_perspective(p):
-            out = perspective_warp_full(
+        m_small = affine_params_to_small(mov_prev, p)  # type: ignore[arg-type]
+        m_full = affine_lift_small_to_full(self.s, m_small)
+
+        if self._has_active_perspective(p):
+            out = perspective_with_affine_warp_full(
                 img_full=img_full,
                 base_w=bw,
                 base_h=bh,
                 dest_quad_prev=p["persp"],  # type: ignore[index]
                 preview_scale=self.s,
+                m_full=m_full,
             )
         else:
-            mov_prev = self._get_preview(path)
-            m_small = affine_params_to_small(mov_prev, p)  # type: ignore[arg-type]
-            m_full = affine_lift_small_to_full(self.s, m_small)
             out = cv2.warpAffine(
                 img_full,
                 m_full,

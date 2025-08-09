@@ -5,9 +5,10 @@ from PyQt5 import QtCore, QtWidgets  # type: ignore
 
 def row_container(font) -> QtWidgets.QWidget:
     w = QtWidgets.QWidget()
+    # Make the row expand to full toolbar width so the right group reaches the extreme right
+    w.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Preferred)
     lay = QtWidgets.QHBoxLayout(w)
-    # add a touch of right padding so the right group breathes
-    lay.setContentsMargins(0, 0, 12, 0)
+    lay.setContentsMargins(0, 0, 0, 0)
     lay.setSpacing(6)
     lay.setAlignment(QtCore.Qt.AlignLeft)
     w.setFont(font)
@@ -23,8 +24,9 @@ def label(txt: str, font) -> QtWidgets.QLabel:
 def right_group(parent) -> QtWidgets.QWidget:
     """A right-aligned container for info text + gear."""
     host = QtWidgets.QWidget(parent)
+    host.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Preferred)
     lay = QtWidgets.QHBoxLayout(host)
-    lay.setContentsMargins(0, 0, 0, 0)
+    lay.setContentsMargins(0, 0, 6, 0)  # small right padding
     lay.setSpacing(6)
     lay.setAlignment(QtCore.Qt.AlignRight)
     return host

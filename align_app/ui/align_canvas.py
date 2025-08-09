@@ -1,19 +1,24 @@
 """AlignCanvas widget that exposes signals and delegates to CanvasCore.
 
-Adds Qt signals, undo/redo, pan mode, and small glue for external UI.
+Adds Qt signals, undo/redo, pan mode, cropping, and small glue for external UI.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List, Tuple
 
 from PyQt5 import QtCore, QtWidgets  # type: ignore
 import cv2
+import numpy as np
 
 from .canvas_core import CanvasCore
 from .canvas_affine import affine_params_to_small
 from .canvas_perspective import ensure_perspective_quad
+
+
+Point = Tuple[float, float]
+Quad = List[Point]
 
 
 class AlignCanvas(CanvasCore):
@@ -23,9 +28,9 @@ class AlignCanvas(CanvasCore):
     currentPathChanged = QtCore.pyqtSignal(object)  # type: ignore[attr-defined]
     # Emits (done, total) during crop
     cropProgress = QtCore.pyqtSignal(int, int)  # type: ignore[attr-defined]
-    # Mode changed
-    modeChanged = QtCore.pyqtSignal(bool)  # True if perspective
-    # Corner changed
+    # Mode changed (True if perspective)
+    modeChanged = QtCore.pyqtSignal(bool)
+    # Corner changed (0..3)
     activeCornerChanged = QtCore.pyqtSignal(int)
 
     def __init__(self, parent: Optional[QtWidgets.QWidget] = None):
@@ -37,11 +42,9 @@ class AlignCanvas(CanvasCore):
     # ----- signal glue -----
 
     def _emit_current_path(self) -> None:
-        """Emit currentPathChanged for external UI."""
         self.currentPathChanged.emit(self.current_path())
 
     def _emit_crop_progress(self, done: int, total: int) -> None:
-        """Emit crop progress for external UI."""
         self.cropProgress.emit(done, total)
 
     # ----- history -----
@@ -87,6 +90,10 @@ class AlignCanvas(CanvasCore):
             return
         self._push_undo()
         self.params[p] = {"tx": 0.0, "ty": 0.0, "theta": 0.0, "scale": 1.0}
+        if "persp" in self.params[p]:
+            # keep perspective quad only if user is in perspective; otherwise drop
+            pass
+
         self.update()
 
     # ----- public helpers for UI -----
@@ -119,25 +126,41 @@ class AlignCanvas(CanvasCore):
             self.setCursor(QtCore.Qt.ArrowCursor)
         self.update()
 
-    # ----- mode / perspective helpers -----
+    # ----- perspective helpers -----
+
+    @staticmethod
+    def _is_default_quad(pw: int, ph: int, quad: Quad) -> bool:
+        if len(quad) != 4:
+            return True
+        default = [(0.0, 0.0), (pw - 1.0, 0.0), (pw - 1.0, ph - 1.0), (0.0, ph - 1.0)]
+        eps = 1e-3
+        for (x1, y1), (x2, y2) in zip(quad, default):
+            if abs(x1 - x2) > eps or abs(y1 - y2) > eps:
+                return False
+        return True
 
     def set_perspective_mode(self, is_persp: bool) -> None:
-        if self.perspective_mode == bool(is_persp):
+        """Enable/disable perspective. When enabling, initialize quad from the current affine
+        state so the image DOES NOT reset; it continues from what you already aligned.
+        """
+        enable = bool(is_persp)
+        if self.perspective_mode == enable:
+            self.modeChanged.emit(self.perspective_mode)
             return
-        self.perspective_mode = bool(is_persp)
-        # Initialize perspective quad from current affine transform once
-        if self.perspective_mode:
+
+        self.perspective_mode = enable
+        if enable:
             pth = self.current_path()
             if pth:
                 pr = self.params.get(pth, None)
                 if pr is not None:
-                    # Only init if no quad exists
-                    if "persp" not in pr:
+                    quad = pr.get("persp")
+                    need_init = not isinstance(quad, list)
+                    if not need_init and isinstance(quad, list):
+                        need_init = AlignCanvas._is_default_quad(self.pw, self.ph, quad)  # type: ignore[arg-type]
+                    if need_init:
                         mov_prev = self._get_preview(pth)
                         m_small = affine_params_to_small(mov_prev, pr)
-                        # transform corners
-                        import numpy as np
-
                         h, w = mov_prev.shape[:2]
                         corners = np.float32(
                             [[0, 0], [w - 1, 0], [w - 1, h - 1], [0, h - 1]]
@@ -173,7 +196,6 @@ class AlignCanvas(CanvasCore):
 
     def move_dxdy(self, dx: float, dy: float) -> None:
         if self.perspective_mode:
-            # In perspective mode, use corner nudge via context group
             return
         p = self.current_path()
         if not p:

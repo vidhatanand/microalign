@@ -4,11 +4,11 @@ from PyQt5 import QtCore, QtWidgets  # type: ignore
 
 
 def _row_container(font) -> QtWidgets.QWidget:
-    """Return a horizontal container with tight spacing and toolbar font."""
     w = QtWidgets.QWidget()
     lay = QtWidgets.QHBoxLayout(w)
     lay.setContentsMargins(0, 0, 0, 0)
     lay.setSpacing(6)
+    lay.setAlignment(QtCore.Qt.AlignLeft)
     w.setFont(font)
     return w
 
@@ -41,14 +41,14 @@ def _build_rotate_group(mw) -> QtWidgets.QWidget:
     w = _row_container(mw.toolbar_bottom.font())
     lay = w.layout()
     lay.addWidget(QtWidgets.QLabel("Rotate:"))
-    btn_rminus = QtWidgets.QToolButton()
-    btn_rminus.setText("Rot−")
-    btn_rplus = QtWidgets.QToolButton()
-    btn_rplus.setText("Rot+")
-    btn_rminus.clicked.connect(lambda: mw.canvas.rotate_deg(-mw.canvas.rot_step))
-    btn_rplus.clicked.connect(lambda: mw.canvas.rotate_deg(+mw.canvas.rot_step))
-    lay.addWidget(btn_rminus)
-    lay.addWidget(btn_rplus)
+    b1 = QtWidgets.QToolButton()
+    b1.setText("Rot−")
+    b2 = QtWidgets.QToolButton()
+    b2.setText("Rot+")
+    b1.clicked.connect(lambda: mw.canvas.rotate_deg(-mw.canvas.rot_step))
+    b2.clicked.connect(lambda: mw.canvas.rotate_deg(+mw.canvas.rot_step))
+    lay.addWidget(b1)
+    lay.addWidget(b2)
     rs = QtWidgets.QDoubleSpinBox()
     rs.setDecimals(2)
     rs.setSingleStep(0.05)
@@ -65,25 +65,19 @@ def _build_zoom_group(mw) -> QtWidgets.QWidget:
     w = _row_container(mw.toolbar_bottom.font())
     lay = w.layout()
     lay.addWidget(QtWidgets.QLabel("Zoom (image):"))
-    btn_zminus = QtWidgets.QToolButton()
-    btn_zminus.setText("Zoom−")
-    btn_zplus = QtWidgets.QToolButton()
-    btn_zplus.setText("Zoom+")
-    btn_mzminus = QtWidgets.QToolButton()
-    btn_mzminus.setText("µZoom−")
-    btn_mzplus = QtWidgets.QToolButton()
-    btn_mzplus.setText("µZoom+")
-    btn_zminus.clicked.connect(
-        lambda: mw.canvas.zoom_factor(1.0 - mw.canvas.scale_step)
-    )
-    btn_zplus.clicked.connect(lambda: mw.canvas.zoom_factor(1.0 + mw.canvas.scale_step))
-    btn_mzminus.clicked.connect(
-        lambda: mw.canvas.zoom_factor(1.0 - mw.canvas.micro_scale_step)
-    )
-    btn_mzplus.clicked.connect(
-        lambda: mw.canvas.zoom_factor(1.0 + mw.canvas.micro_scale_step)
-    )
-    for b in (btn_zminus, btn_zplus, btn_mzminus, btn_mzplus):
+    z1 = QtWidgets.QToolButton()
+    z1.setText("Zoom−")
+    z2 = QtWidgets.QToolButton()
+    z2.setText("Zoom+")
+    mz1 = QtWidgets.QToolButton()
+    mz1.setText("µZoom−")
+    mz2 = QtWidgets.QToolButton()
+    mz2.setText("µZoom+")
+    z1.clicked.connect(lambda: mw.canvas.zoom_factor(1.0 - mw.canvas.scale_step))
+    z2.clicked.connect(lambda: mw.canvas.zoom_factor(1.0 + mw.canvas.scale_step))
+    mz1.clicked.connect(lambda: mw.canvas.zoom_factor(1.0 - mw.canvas.micro_scale_step))
+    mz2.clicked.connect(lambda: mw.canvas.zoom_factor(1.0 + mw.canvas.micro_scale_step))
+    for b in (z1, z2, mz1, mz2):
         lay.addWidget(b)
     zs = QtWidgets.QDoubleSpinBox()
     zs.setDecimals(3)
@@ -108,13 +102,35 @@ def _build_perspective_group(mw) -> QtWidgets.QWidget:
     w = _row_container(mw.toolbar_bottom.font())
     lay = w.layout()
     lay.addWidget(QtWidgets.QLabel("Corners:"))
-    # ⌜ ⌝ ⌟ ⌞
+
+    # Buttons are now EXCLUSIVE via QButtonGroup
+    group = QtWidgets.QButtonGroup(mw)
+    group.setExclusive(True)
+    mw._persp_btn_group = group
+    mw._persp_btns = []
+
     for i, ch in enumerate(("⌜", "⌝", "⌟", "⌞")):
         btn = QtWidgets.QToolButton()
         btn.setText(ch)
         btn.setCheckable(True)
-        btn.clicked.connect(lambda _=False, i=i: mw.canvas.set_active_corner(i))
+        group.addButton(btn, i)
         lay.addWidget(btn)
+        mw._persp_btns.append(btn)
+
+    # sync from canvas -> toolbar
+    def _sync_corner(idx: int) -> None:
+        b = group.button(idx)
+        if b and not b.isChecked():
+            b.setChecked(True)
+
+    mw.canvas.activeCornerChanged.connect(_sync_corner)
+    _sync_corner(mw.canvas.active_corner)
+
+    # toolbar -> canvas
+    group.idToggled.connect(
+        lambda idx, checked: checked and mw.canvas.set_active_corner(idx)
+    )
+
     for label, dx, dy in [("←", -1, 0), ("→", +1, 0), ("↑", 0, -1), ("↓", 0, +1)]:
         btn = QtWidgets.QToolButton()
         btn.setText(label)
@@ -138,20 +154,20 @@ def _build_perspective_group(mw) -> QtWidgets.QWidget:
 def _build_grid_group(mw) -> QtWidgets.QWidget:
     w = _row_container(mw.toolbar_bottom.font())
     lay = w.layout()
-    cb = QtWidgets.QCheckBox("Show Grid")
-    cb.setChecked(mw.canvas.grid_on)
-    cb.toggled.connect(
-        lambda v: (setattr(mw.canvas, "grid_on", bool(v)), mw.canvas.update())
-    )
-    lay.addWidget(cb)
     sp = QtWidgets.QSpinBox()
     sp.setRange(5, 400)
     sp.setValue(mw.canvas.grid_step)
     sp.valueChanged.connect(
         lambda v: (setattr(mw.canvas, "grid_step", int(v)), mw.canvas.update())
     )
-    lay.addWidget(QtWidgets.QLabel("Step:"))
+    cb = QtWidgets.QCheckBox("Show Grid")
+    cb.setChecked(mw.canvas.grid_on)
+    cb.toggled.connect(
+        lambda v: (setattr(mw.canvas, "grid_on", bool(v)), mw.canvas.update())
+    )
+    lay.addWidget(QtWidgets.QLabel("Grid:"))
     lay.addWidget(sp)
+    lay.addWidget(cb)
     return w
 
 
@@ -180,20 +196,20 @@ def _build_crop_group(mw) -> QtWidgets.QWidget:
 def _build_overlay_group(mw) -> QtWidgets.QWidget:
     w = _row_container(mw.toolbar_bottom.font())
     lay = w.layout()
-    cb_overlay = QtWidgets.QCheckBox("Overlay")
-    cb_overlay.setChecked(mw.canvas.overlay_mode)
-    cb_overlay.toggled.connect(
-        lambda v: (setattr(mw.canvas, "overlay_mode", bool(v)), mw.canvas.update())
-    )
+
     cb_outline = QtWidgets.QCheckBox("Outline")
     cb_outline.setChecked(mw.canvas.show_outline)
     cb_outline.toggled.connect(
         lambda v: (setattr(mw.canvas, "show_outline", bool(v)), mw.canvas.update())
     )
-    lay.addWidget(cb_overlay)
     lay.addWidget(cb_outline)
 
-    lay.addWidget(QtWidgets.QLabel("Alpha:"))
+    cb_overlay = QtWidgets.QCheckBox("Overlay")
+    cb_overlay.setChecked(mw.canvas.overlay_mode)
+    lay.addWidget(cb_overlay)
+
+    alpha_row = _row_container(mw.toolbar_bottom.font())
+    alpha_row.layout().addWidget(QtWidgets.QLabel("Alpha:"))
     sld = QtWidgets.QSlider(QtCore.Qt.Horizontal)
     sld.setRange(0, 100)
     sld.setFixedWidth(160)
@@ -201,7 +217,18 @@ def _build_overlay_group(mw) -> QtWidgets.QWidget:
     sld.valueChanged.connect(
         lambda v: (setattr(mw.canvas, "alpha", v / 100.0), mw.canvas.update())
     )
-    lay.addWidget(sld)
+    alpha_row.layout().addWidget(sld)
+    alpha_row.setVisible(bool(mw.canvas.overlay_mode))
+    mw._overlay_alpha_row = alpha_row
+    lay.addWidget(alpha_row)
+
+    cb_overlay.toggled.connect(
+        lambda v: (
+            setattr(mw.canvas, "overlay_mode", bool(v)),
+            mw._overlay_alpha_row.setVisible(bool(v)),
+            mw.canvas.update(),
+        )
+    )
     return w
 
 
@@ -209,7 +236,7 @@ def build_context_toolbar(mw) -> None:
     tb = mw.toolbar_bottom
     tb.clear()
 
-    # ---- Tab actions (use QActions so toolbar overflow chevron works) ----
+    # ---- Tab actions ----
     mw.ctx_group = QtWidgets.QActionGroup(mw)
     mw.ctx_group.setExclusive(True)
     mw.ctx_actions = {}
@@ -222,7 +249,6 @@ def build_context_toolbar(mw) -> None:
         mw.ctx_actions[name] = act
         act.toggled.connect(lambda checked, n=name: checked and _set_context(mw, n))
 
-    # Order matters
     add_tab("move", "Move")
     add_tab("rotate", "Rotate")
     add_tab("zoom", "Zoom")
@@ -233,12 +259,37 @@ def build_context_toolbar(mw) -> None:
 
     tb.addSeparator()
 
-    # ---- Single stacked panel with per-tab groups (only one widget is present) ----
-    mw.ctx_stack = QtWidgets.QStackedWidget()
-    mw.ctx_stack.setSizePolicy(
-        QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Preferred
-    )
+    # ---- Popup “More…” ----
+    mw.ctx_more_btn = QtWidgets.QToolButton()
+    mw.ctx_more_btn.setText("…")
+    mw.ctx_more_btn.setToolTip("Show controls in a popup")
 
+    def _show_more():
+        name = mw._current_ctx or "move"
+        panel = mw.ctx_builders[name](mw)  # fresh panel for popup
+        dlg = QtWidgets.QDialog(mw)
+        dlg.setWindowTitle(f"{name.capitalize()} controls")
+        v = QtWidgets.QVBoxLayout(dlg)
+        sc = QtWidgets.QScrollArea()
+        sc.setWidgetResizable(True)
+        host = QtWidgets.QWidget()
+        lay = QtWidgets.QVBoxLayout(host)
+        lay.setContentsMargins(8, 8, 8, 8)
+        lay.addWidget(panel)
+        sc.setWidget(host)
+        v.addWidget(sc)
+        btns = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.Close)
+        btns.rejected.connect(dlg.reject)
+        btns.accepted.connect(dlg.accept)
+        v.addWidget(btns)
+        dlg.resize(520, 220)
+        dlg.exec_()
+
+    mw.ctx_more_btn.clicked.connect(_show_more)
+    tb.addWidget(mw.ctx_more_btn)
+
+    # ---- Stacked controls (left-aligned) ----
+    mw.ctx_stack = QtWidgets.QStackedWidget()
     mw.ctx_builders = {
         "move": _build_move_group,
         "rotate": _build_rotate_group,
@@ -249,49 +300,23 @@ def build_context_toolbar(mw) -> None:
         "overlay": _build_overlay_group,
     }
     mw.ctx_index = {}
-
-    # Build and add each group once
     for i, name in enumerate(mw.ctx_builders.keys()):
         panel = mw.ctx_builders[name](mw)
         mw.ctx_stack.addWidget(panel)
         mw.ctx_index[name] = i
 
-    # Put the stack into the toolbar as a QWidgetAction, which behaves better with overflow
+    host = QtWidgets.QWidget()
+    hlay = QtWidgets.QHBoxLayout(host)
+    hlay.setContentsMargins(0, 0, 0, 0)
+    hlay.setSpacing(0)
+    hlay.setAlignment(QtCore.Qt.AlignLeft)
+    hlay.addWidget(mw.ctx_stack)
+    hlay.addStretch(1)
     stack_action = QtWidgets.QWidgetAction(mw)
-    stack_action.setDefaultWidget(mw.ctx_stack)
+    stack_action.setDefaultWidget(host)
     tb.addAction(stack_action)
 
-    # ---- "More…" button to show full controls in a popup when space is tight ----
-    mw.ctx_more_btn = QtWidgets.QToolButton()
-    mw.ctx_more_btn.setText("…")
-    mw.ctx_more_btn.setToolTip("Show controls in a popup")
-
-    def _show_more():
-        # Build a fresh panel for the current tab so we don't reparent the live one
-        name = mw._current_ctx or "move"
-        panel = mw.ctx_builders[name](mw)
-        dlg = QtWidgets.QDialog(mw)
-        dlg.setWindowTitle(f"{name.capitalize()} controls")
-        v = QtWidgets.QVBoxLayout(dlg)
-        sv = QtWidgets.QScrollArea()
-        sv.setWidgetResizable(True)
-        host = QtWidgets.QWidget()
-        lay = QtWidgets.QVBoxLayout(host)
-        lay.setContentsMargins(8, 8, 8, 8)
-        lay.addWidget(panel)
-        sv.setWidget(host)
-        v.addWidget(sv)
-        btns = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.Close)
-        btns.rejected.connect(dlg.reject)
-        btns.accepted.connect(dlg.accept)
-        v.addWidget(btns)
-        dlg.resize(480, 200)
-        dlg.exec_()
-
-    mw.ctx_more_btn.clicked.connect(_show_more)
-    tb.addWidget(mw.ctx_more_btn)
-
-    # ---- Info label at the far right ----
+    # ---- Info label ----
     tb.addSeparator()
     mw.ctx_info = QtWidgets.QLabel("")
     mw.ctx_info.setAlignment(QtCore.Qt.AlignVCenter | QtCore.Qt.AlignRight)
@@ -299,7 +324,7 @@ def build_context_toolbar(mw) -> None:
     mw.ctx_info.setFont(tb.font())
     tb.addWidget(mw.ctx_info)
 
-    # Default tab
+    # Default
     mw._current_ctx = None
     mw.ctx_actions["move"].setChecked(True)
     _set_context(mw, "move")
@@ -307,14 +332,9 @@ def build_context_toolbar(mw) -> None:
 
 def _set_context(mw, name: str) -> None:
     mw._current_ctx = name
-    # Show the correct panel
-    idx = mw.ctx_index.get(name, 0)
-    mw.ctx_stack.setCurrentIndex(idx)
-
-    # Sync canvas mode (only Perspective tab toggles perspective mode)
+    mw.ctx_stack.setCurrentIndex(mw.ctx_index.get(name, 0))
     mw.canvas.set_perspective_mode(name == "perspective")
 
-    # Contextual info text
     if name == "move":
         mw.ctx_info.setText(f"Move step: {mw.canvas.step:.1f}px")
     elif name == "rotate":

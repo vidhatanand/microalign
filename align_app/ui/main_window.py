@@ -7,7 +7,7 @@ from typing import Optional
 
 from PyQt5 import QtCore, QtWidgets  # type: ignore
 
-from align_app.ui.canvas_widget import CanvasWidget
+from align_app.ui.align_canvas import AlignCanvas
 from align_app.ui.sidebar import build_sidebar, highlight_current_in_sidebar
 from align_app.ui.watchers import rebuild_watchers
 from align_app.ui.top_toolbar import build_top_toolbar
@@ -45,7 +45,7 @@ class MainWindow(QtWidgets.QMainWindow):
         layout.addWidget(self.toolbar_top)
         layout.addWidget(self.toolbar_bottom)
 
-        self.canvas = CanvasWidget()
+        self.canvas = AlignCanvas()
         layout.addWidget(self.canvas, 1)
 
         splitter.addWidget(right)
@@ -63,15 +63,11 @@ class MainWindow(QtWidgets.QMainWindow):
         # Sidebar interactions
         self.sidebar.itemDoubleClicked.connect(self._sidebar_double_clicked)
 
-        # Status bar + project path (left) + progress (right)
+        # Status bar + progress + project path (left side)
         self.status = QtWidgets.QStatusBar()
         self.setStatusBar(self.status)
-
         self.project_label = QtWidgets.QLabel("No project")
-        self.project_label.setTextInteractionFlags(
-            QtCore.Qt.TextSelectableByMouse | QtCore.Qt.TextSelectableByKeyboard
-        )
-        self.status.addWidget(self.project_label, 1)
+        self.status.addWidget(self.project_label)  # left side of status bar
 
         self.progress = QtWidgets.QProgressBar()
         self.progress.setVisible(False)
@@ -146,15 +142,12 @@ class MainWindow(QtWidgets.QMainWindow):
     # ---------- welcome ----------
 
     def _welcome_startup(self) -> None:
-        # Only show if no project loaded
         if self.project.info:
             return
         recents = self.project.recent_projects()
         if not recents:
-            # No recent projects: directly open new wizard
             self.project.new_project_wizard(self)
             return
-
         dlg = QtWidgets.QDialog(self)
         dlg.setWindowTitle("Welcome to MicroAlign")
         lay = QtWidgets.QVBoxLayout(dlg)
@@ -167,15 +160,12 @@ class MainWindow(QtWidgets.QMainWindow):
         lay.addWidget(listw)
 
         btns = QtWidgets.QDialogButtonBox()
-        btn_open_sel = btns.addButton(
-            "Open Selected", QtWidgets.QDialogButtonBox.AcceptRole
-        )
-        btn_browse = btns.addButton("Browse…", QtWidgets.QDialogButtonBox.ActionRole)
-        btn_new = btns.addButton("New Project", QtWidgets.QDialogButtonBox.ActionRole)
+        btn_new = btns.addButton("New Project", QtWidgets.QDialogButtonBox.AcceptRole)
+        btn_open = btns.addButton("Open…", QtWidgets.QDialogButtonBox.ActionRole)
         btn_cancel = btns.addButton("Cancel", QtWidgets.QDialogButtonBox.RejectRole)
         lay.addWidget(btns)
 
-        def open_recent_item(item: QtWidgets.QListWidgetItem) -> None:
+        def pick_recent(item):
             root = Path(item.text())
             manifest = root / "project.json"
             if manifest.exists():
@@ -185,31 +175,13 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.project.changed.emit(info)
                 dlg.accept()
 
-        listw.itemDoubleClicked.connect(open_recent_item)
-        listw.itemActivated.connect(open_recent_item)
-
-        def _do_open_selected():
-            item = listw.currentItem()
-            if not item:
-                QtWidgets.QMessageBox.information(
-                    dlg,
-                    "Select a project",
-                    "Please pick a recent project from the list.",
-                )
-                return
-            open_recent_item(item)
-
-        def _do_browse():
-            dlg.accept()
-            self.project.open_project(self)
-
-        def _do_new():
-            dlg.accept()
-            self.project.new_project_wizard(self)
-
-        btn_open_sel.clicked.connect(_do_open_selected)
-        btn_browse.clicked.connect(_do_browse)
-        btn_new.clicked.connect(_do_new)
+        listw.itemDoubleClicked.connect(pick_recent)
+        btn_new.clicked.connect(
+            lambda: (dlg.accept(), self.project.new_project_wizard(self))
+        )
+        btn_open.clicked.connect(
+            lambda: (dlg.accept(), self.project.open_project(self))
+        )
         btn_cancel.clicked.connect(dlg.reject)
 
         dlg.exec_()
@@ -218,7 +190,6 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _toggle_sidebar(self, visible: bool) -> None:
         self.sidebar.setVisible(bool(visible))
-        # resize splitter to give/take space
         if visible:
             self.centralWidget().setSizes([350, self.width() - 350])
         else:
@@ -242,7 +213,6 @@ class MainWindow(QtWidgets.QMainWindow):
                     self.canvas.update()
                     highlight_current_in_sidebar(self.sidebar, self.canvas)
         elif p.is_dir():
-            # Replace Source to clicked folder inside current project
             self.canvas.set_paths(
                 base_path=None, src_dir=p, align_out=None, crop_out=None
             )
@@ -254,7 +224,6 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _on_project_changed(self, info: Optional[ProjectInfo]) -> None:
         if info is None:
-            # clear canvas
             self.canvas.set_paths(None, None, None, None)
             self.project_label.setText("No project")
             build_sidebar(self.sidebar, self.canvas)
@@ -262,7 +231,6 @@ class MainWindow(QtWidgets.QMainWindow):
             highlight_current_in_sidebar(self.sidebar, self.canvas)
             return
 
-        # Set canvas paths from project
         self.canvas.set_paths(
             info.base_image, info.source_dir, info.align_dir, info.crops_dir
         )
@@ -303,5 +271,4 @@ class MainWindow(QtWidgets.QMainWindow):
         self.progress.setMaximum(total)
         self.progress.setValue(done)
         if done >= total:
-            # small delay to show 100%
             QtCore.QTimer.singleShot(600, lambda: self.progress.setVisible(False))

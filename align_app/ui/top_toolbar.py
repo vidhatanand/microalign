@@ -18,6 +18,23 @@ def build_top_toolbar(mw) -> None:
 
     style = mw.style()
 
+    # ---- Sidebar toggle (<< / >>) – FIRST on the toolbar ----
+    mw.side_btn = QtWidgets.QToolButton()
+    mw.side_btn.setCheckable(True)
+    mw.side_btn.setChecked(True)
+    mw.side_btn.setText("<<")
+    mw.side_btn.setToolTip("Hide sidebar")
+
+    def _toggle_side(v: bool) -> None:
+        mw._toggle_sidebar(bool(v))
+        mw.side_btn.setText("<<" if v else ">>")
+        mw.side_btn.setToolTip("Hide sidebar" if v else "Show sidebar")
+
+    mw.side_btn.toggled.connect(_toggle_side)
+    tb.addWidget(mw.side_btn)
+
+    tb.addSeparator()
+
     # ---- Navigation & Save group ----
     nav_widget = QtWidgets.QWidget()
     nav_layout = QtWidgets.QHBoxLayout(nav_widget)
@@ -80,7 +97,8 @@ def build_top_toolbar(mw) -> None:
     mw.hand_pan_btn.setCheckable(True)
     mw.hand_pan_btn.setText("Pan")
     mw.hand_pan_btn.setToolButtonStyle(QtCore.Qt.ToolButtonTextOnly)
-    mw.hand_pan_btn.toggled.connect(lambda v: mw.canvas.set_pan_mode(bool(v)))
+    # AlignCanvas API:
+    mw.hand_pan_btn.toggled.connect(lambda v: mw.canvas.set_hand_pan_mode(bool(v)))
     tb.addWidget(mw.hand_pan_btn)
 
     tb.addSeparator()
@@ -100,7 +118,8 @@ def build_top_toolbar(mw) -> None:
 
     reset_btn = QtWidgets.QToolButton()
     reset_btn.setText("Reset Image")
-    reset_btn.clicked.connect(mw.canvas.reset_current)
+    # AlignCanvas API:
+    reset_btn.clicked.connect(mw.canvas.reset_current_image)
 
     reset_view_btn = QtWidgets.QToolButton()
     reset_view_btn.setText("Reset View")
@@ -108,23 +127,6 @@ def build_top_toolbar(mw) -> None:
 
     for w in (undo_btn, redo_btn, reset_btn, reset_view_btn):
         tb.addWidget(w)
-
-    tb.addSeparator()
-
-    # ---- Sidebar toggle (<< / >>) ----
-    mw.side_btn = QtWidgets.QToolButton()
-    mw.side_btn.setCheckable(True)
-    mw.side_btn.setChecked(True)
-    mw.side_btn.setText("<<")
-    mw.side_btn.setToolTip("Hide sidebar")
-
-    def _toggle_side(v: bool) -> None:
-        mw._toggle_sidebar(bool(v))
-        mw.side_btn.setText("<<" if v else ">>")
-        mw.side_btn.setToolTip("Hide sidebar" if v else "Show sidebar")
-
-    mw.side_btn.toggled.connect(_toggle_side)
-    tb.addWidget(mw.side_btn)
 
 
 def _on_zoom_slider(mw, value: int) -> None:
@@ -146,6 +148,8 @@ def _reset_view_zoom(mw) -> None:
     mw.zoom_slider.setValue(100)
     mw.zoom_slider.blockSignals(False)
     mw.canvas.view_zoom = 1.0
-    mw.canvas.view_pan_xp = 0.0
-    mw.canvas.view_pan_yp = 0.0
+    # AlignCanvas uses QPointF
+    from PyQt5 import QtCore as _QtCore  # type: ignore
+
+    mw.canvas.view_pan = _QtCore.QPointF(0.0, 0.0)
     mw.canvas.update()

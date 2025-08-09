@@ -6,10 +6,10 @@ from align_app.utils.img_io import clamp
 
 
 def _lbl(tb: QtWidgets.QToolBar, text: str) -> QtWidgets.QLabel:
-    l = QtWidgets.QLabel(text)
-    l.setAlignment(QtCore.Qt.AlignVCenter | QtCore.Qt.AlignLeft)
-    l.setFont(tb.font())
-    return l
+    layout = QtWidgets.QLabel(text)
+    layout.setAlignment(QtCore.Qt.AlignVCenter | QtCore.Qt.AlignLeft)
+    layout.setFont(tb.font())
+    return layout
 
 
 def build_top_toolbar(mw) -> None:
@@ -149,7 +149,6 @@ def _reset_view_zoom(mw) -> None:
     mw.zoom_slider.blockSignals(False)
     mw.canvas.view_zoom = 1.0
     # AlignCanvas uses QPointF
-    from PyQt5 import QtCore as _QtCore  # type: ignore
 
-    mw.canvas.view_pan = _QtCore.QPointF(0.0, 0.0)
+    mw.canvas.view_pan = QtCore.QPointF(0.0, 0.0)
     mw.canvas.update()

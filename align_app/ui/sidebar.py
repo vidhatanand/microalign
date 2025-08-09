@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import List, Optional
+from typing import Optional
 
 from PyQt5 import QtCore, QtWidgets  # pylint: disable=no-name-in-module
-
-from align_app.utils.img_io import SUPPORTED_LOWER
 
 
 def _add_dir_tree(parent_item: QtWidgets.QTreeWidgetItem, dir_path: Path) -> None:
@@ -15,7 +13,7 @@ def _add_dir_tree(parent_item: QtWidgets.QTreeWidgetItem, dir_path: Path) -> Non
         entries = sorted(
             dir_path.iterdir(), key=lambda p: (p.is_file(), p.name.lower())
         )
-    except Exception:
+    except (OSError, ValueError):
         return
     for p in entries:
         node = QtWidgets.QTreeWidgetItem(parent_item, [p.name])

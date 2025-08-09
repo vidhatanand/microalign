@@ -1,26 +1,63 @@
 from __future__ import annotations
 
 from PyQt5 import QtCore, QtGui  # pylint: disable=no-name-in-module
+from .canvas_perspective import ensure_perspective_quad
 
 
 class CanvasInteractMixin:
     """Mouse & keyboard interactions."""
 
     def _init_interact(self) -> None:
-        pass
+        # attrs provided by CanvasViewMixin; ensure they exist for linters
+        self.view_pan_xp = getattr(self, "view_pan_xp", 0.0)  # type: ignore[attr-defined]
+        self.view_pan_yp = getattr(self, "view_pan_yp", 0.0)  # type: ignore[attr-defined]
+        # Perspective drag state
+        self._persp_dragging: bool = False
+        self._persp_last: QtCore.QPoint | None = None
+        self._persp_start_point: QtCore.QPoint | None = None
 
     # ---- events ----
     def mouseMoveEvent(self, evt: QtGui.QMouseEvent) -> None:  # noqa: N802
         pos = evt.pos()
 
         # View panning (hand tool)
-        if self.pan_mode and not self.crop_mode and self._view_panning and self._pan_last is not None:
+        if (
+            self.pan_mode
+            and not self.crop_mode
+            and self._view_panning
+            and self._pan_last is not None
+        ):
             dx = pos.x() - self._pan_last.x()
             dy = pos.y() - self._pan_last.y()
             self.view_pan_xp -= dx / (self.ds if self.ds else 1.0)
             self.view_pan_yp -= dy / (self.ds if self.ds else 1.0)
             self._pan_last = pos
             self.update()
+
+        # Perspective drag (right panel)
+        if (
+            self.perspective_mode
+            and self._persp_dragging
+            and self._persp_last is not None
+        ):
+            dx_draw = pos.x() - self._persp_last.x()
+            dy_draw = pos.y() - self._persp_last.y()
+            dx_prev = dx_draw / self.ds if self.ds else 0.0
+            dy_prev = dy_draw / self.ds if self.ds else 0.0
+            path = self.current_path()
+            if path:
+                if self._persp_last == self._persp_start_point:
+                    # first motion -> history snapshot
+                    self._push_history(path)
+                p = self.params[path]
+                ensure_perspective_quad(p, self.pw, self.ph)
+                quad = p["persp"]  # type: ignore[index]
+                x, y = quad[self.active_corner]
+                quad[self.active_corner] = (x + dx_prev, y + dy_prev)
+                p["persp"] = quad  # type: ignore[index]
+            self._persp_last = pos
+            self.update()
+            return
 
         # Hover cell (base panel only)
         if self.left_rect.contains(pos):
@@ -70,7 +107,11 @@ class CanvasInteractMixin:
         pos = evt.pos()
 
         # Begin global view pan (hand tool)
-        if evt.button() == QtCore.Qt.LeftButton and self.pan_mode and not self.crop_mode:
+        if (
+            evt.button() == QtCore.Qt.LeftButton
+            and self.pan_mode
+            and not self.crop_mode
+        ):
             self._view_panning = True
             self._pan_last = pos
             self.setCursor(QtCore.Qt.ClosedHandCursor)
@@ -90,8 +131,44 @@ class CanvasInteractMixin:
             self._drag_start_point = pos
             self.setCursor(QtCore.Qt.ClosedHandCursor)
 
+        # Begin perspective drag on right (choose nearest corner)
+        if (
+            evt.button() == QtCore.Qt.LeftButton
+            and self.perspective_mode
+            and self.right_rect.contains(pos)
+            and self.have_files()
+        ):
+            path = self.current_path()
+            if path:
+                p = self.params[path]
+                ensure_perspective_quad(p, self.pw, self.ph)
+                quad = p["persp"]  # type: ignore[index]
+                mx = pos.x() - self.right_rect.x()
+                my = pos.y() - self.right_rect.y()
+                best_i = None
+                best_d2 = None
+                for i, (qx, qy) in enumerate(quad):
+                    dx = mx - qx * self.ds
+                    dy = my - qy * self.ds
+                    d2 = dx * dx + dy * dy
+                    if best_d2 is None or d2 < best_d2:
+                        best_d2 = d2
+                        best_i = i
+                # 12px pick radius (in draw pixels)
+                if best_d2 is not None and best_d2 <= 12 * 12:
+                    self.set_active_corner(int(best_i))
+                    self._persp_dragging = True
+                    self._persp_last = pos
+                    self._persp_start_point = pos
+                    self.setCursor(QtCore.Qt.ClosedHandCursor)
+                    return
+
         # Begin crop on left
-        if evt.button() == QtCore.Qt.LeftButton and self.crop_mode and self.left_rect.contains(pos):
+        if (
+            evt.button() == QtCore.Qt.LeftButton
+            and self.crop_mode
+            and self.left_rect.contains(pos)
+        ):
             self.crop_origin = pos
             self.rubber.setGeometry(QtCore.QRect(pos, QtCore.QSize()))
             self.rubber.show()
@@ -100,15 +177,31 @@ class CanvasInteractMixin:
         if evt.button() == QtCore.Qt.LeftButton and self._view_panning:
             self._view_panning = False
             self._pan_last = None
-            self.setCursor(QtCore.Qt.OpenHandCursor if self.pan_mode else QtCore.Qt.ArrowCursor)
+            self.setCursor(
+                QtCore.Qt.OpenHandCursor if self.pan_mode else QtCore.Qt.ArrowCursor
+            )
+
+        if evt.button() == QtCore.Qt.LeftButton and self._persp_dragging:
+            self._persp_dragging = False
+            self._persp_last = None
+            self._persp_start_point = None
+            self.setCursor(
+                QtCore.Qt.OpenHandCursor if self.pan_mode else QtCore.Qt.ArrowCursor
+            )
 
         if evt.button() == QtCore.Qt.LeftButton and self.dragging:
             self.dragging = False
             self.drag_last = None
-            self.setCursor(QtCore.Qt.OpenHandCursor if self.pan_mode else QtCore.Qt.ArrowCursor)
+            self.setCursor(
+                QtCore.Qt.OpenHandCursor if self.pan_mode else QtCore.Qt.ArrowCursor
+            )
 
         # Finish crop
-        if evt.button() == QtCore.Qt.LeftButton and self.crop_mode and self.rubber.isVisible():
+        if (
+            evt.button() == QtCore.Qt.LeftButton
+            and self.crop_mode
+            and self.rubber.isVisible()
+        ):
             self.rubber.hide()
             rect = self.rubber.geometry()
             if rect.width() > 2 and rect.height() > 2:
@@ -148,7 +241,12 @@ class CanvasInteractMixin:
         # Corner select (1..4) while in perspective
         if key in (QtCore.Qt.Key_1, QtCore.Qt.Key_2, QtCore.Qt.Key_3, QtCore.Qt.Key_4):
             self.set_active_corner(
-                {QtCore.Qt.Key_1: 0, QtCore.Qt.Key_2: 1, QtCore.Qt.Key_3: 2, QtCore.Qt.Key_4: 3}[key]
+                {
+                    QtCore.Qt.Key_1: 0,
+                    QtCore.Qt.Key_2: 1,
+                    QtCore.Qt.Key_3: 2,
+                    QtCore.Qt.Key_4: 3,
+                }[key]
             )
             self.update()
             return

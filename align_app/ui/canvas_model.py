@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
+# pylint: disable=no-member
 import cv2  # type: ignore
 import numpy as np
-from PyQt5 import QtCore, QtWidgets  # pylint: disable=no-name-in-module
+from PyQt5 import QtWidgets  # pylint: disable=no-name-in-module
 
 from align_app.utils.img_io import (
     SUPPORTED_LOWER,
@@ -14,13 +15,11 @@ from align_app.utils.img_io import (
     clamp,
 )
 from .canvas_affine import (
-    affine_compose_preview,
     affine_lift_small_to_full,
     affine_params_to_small,
 )
 from .canvas_perspective import (
     ensure_perspective_quad,
-    perspective_compose_preview,
     perspective_warp_full,
 )
 
@@ -213,7 +212,8 @@ class CanvasModelMixin:
                 key=lambda p: str(p).lower(),
             )
             self.params = {
-                p: {"tx": 0.0, "ty": 0.0, "theta": 0.0, "scale": 1.0} for p in self.files
+                p: {"tx": 0.0, "ty": 0.0, "theta": 0.0, "scale": 1.0}
+                for p in self.files
             }
             self.idx = 0
             self.cache_prev.clear()

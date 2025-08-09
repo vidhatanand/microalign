@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from typing import Optional
+from typing import Callable, Optional
 
+# pylint: disable=no-member
 import cv2  # type: ignore
-from PyQt5 import QtCore, QtWidgets  # pylint: disable=no-name-in-module
+from PyQt5 import QtCore, QtWidgets  # type: ignore
 
 from align_app.utils.img_io import load_image_bgr
 
@@ -31,9 +32,15 @@ class CanvasCropMixin:
         if use_aligned is None:
             box = QtWidgets.QMessageBox(self)
             box.setWindowTitle("Crop which images?")
-            box.setText("Choose which images to crop with the rectangle drawn on the Base:")
-            btn_aligned = box.addButton("Aligned images", QtWidgets.QMessageBox.AcceptRole)
-            btn_source = box.addButton("Original source images", QtWidgets.QMessageBox.ActionRole)
+            box.setText(
+                "Choose which images to crop with the rectangle drawn on the Base:"
+            )
+            btn_aligned = box.addButton(
+                "Aligned images", QtWidgets.QMessageBox.AcceptRole
+            )
+            btn_source = box.addButton(
+                "Original source images", QtWidgets.QMessageBox.ActionRole
+            )
             box.addButton(QtWidgets.QMessageBox.Cancel)
             box.exec_()
             clicked = box.clickedButton()
@@ -50,7 +57,9 @@ class CanvasCropMixin:
         self.crop_origin = None
         self.rubber.hide()
         QtWidgets.QMessageBox.information(
-            self, "Crop", "Drag a rectangle on the BASE (left) panel.\nRelease mouse to confirm."
+            self,
+            "Crop",
+            "Drag a rectangle on the BASE (left) panel.\nRelease mouse to confirm.",
         )
 
     def _confirm_crop_all(self) -> None:
@@ -59,6 +68,7 @@ class CanvasCropMixin:
             return
 
         rect = self.crop_rect_px
+
         # pos relative to left panel
         xw = rect.x() - self.left_rect.x()
         yw = rect.y() - self.left_rect.y()
@@ -67,6 +77,7 @@ class CanvasCropMixin:
 
         if self.ds == 0:
             return
+
         # draw -> preview
         xp = xw / self.ds
         yp = yw / self.ds
@@ -104,15 +115,24 @@ class CanvasCropMixin:
         total = len(file_list)
         done = 0
 
-        notify = getattr(self, "_emit_crop_progress", None)
+        # Robust, typed progress callback to appease linters
+        notify_attr = getattr(self, "_emit_crop_progress", None)
+
+        def _noop_progress(_a: int, _b: int) -> None:
+            return
+
+        notify_fn: Callable[[int, int], None]
+        if callable(notify_attr):
+            notify_fn = notify_attr  # type: ignore[assignment]
+        else:
+            notify_fn = _noop_progress
 
         for pth in file_list:
             if self.crop_from_aligned:
                 img = cv2.imread(str(pth), cv2.IMREAD_COLOR)
                 if img is None:
                     done += 1
-                    if notify:
-                        notify(done, total)
+                    notify_fn(done, total)
                     continue
                 out_name = pth.name
             else:
@@ -123,11 +143,9 @@ class CanvasCropMixin:
             cv2.imwrite(str(self.crop_out / out_name), crop)
 
             done += 1
-            if notify:
-                notify(done, total)
+            notify_fn(done, total)
 
-        if notify:
-            notify(total, total)
+        notify_fn(total, total)
 
         QtWidgets.QMessageBox.information(
             self,

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Optional, Tuple
 
+# pylint: disable=no-member
 import cv2  # type: ignore
 from PyQt5 import QtCore, QtGui  # pylint: disable=no-name-in-module
 
@@ -75,7 +76,9 @@ class CanvasViewMixin:
         if not self.have_base():
             p.setPen(QtGui.QColor(220, 220, 220))
             p.drawText(
-                self.rect(), QtCore.Qt.AlignCenter, "Pick a Base image from the toolbar."
+                self.rect(),
+                QtCore.Qt.AlignCenter,
+                "Pick a Base image from the toolbar.",
             )
             p.end()
             return
@@ -92,7 +95,9 @@ class CanvasViewMixin:
             p.end()
             return
         if self.ds != 1.0:
-            left_bgr = cv2.resize(left_bgr, (self.tw, self.th), interpolation=cv2.INTER_AREA)
+            left_bgr = cv2.resize(
+                left_bgr, (self.tw, self.th), interpolation=cv2.INTER_AREA
+            )
         left_img = QtGui.QPixmap.fromImage(bgr_to_qimage(left_bgr))
 
         # Right (moving)
@@ -123,7 +128,9 @@ class CanvasViewMixin:
                         outline=self.show_outline,
                     )
                 if self.ds != 1.0:
-                    right_bgr = cv2.resize(right_bgr, (self.tw, self.th), interpolation=cv2.INTER_AREA)
+                    right_bgr = cv2.resize(
+                        right_bgr, (self.tw, self.th), interpolation=cv2.INTER_AREA
+                    )
                 right_img = QtGui.QPixmap.fromImage(bgr_to_qimage(right_bgr))
 
         # Panel rects (apply pan offset)
@@ -168,7 +175,11 @@ class CanvasViewMixin:
             x0, y0, x1, y1 = self.hover_cell
             hp = QtGui.QPen(QtGui.QColor(255, 255, 0), 2, QtCore.Qt.SolidLine)
             p.setPen(hp)
-            p.drawRect(QtCore.QRect(left_rect.x() + x0, left_rect.y() + y0, x1 - x0, y1 - y0))
-            p.drawRect(QtCore.QRect(right_rect.x() + x0, right_rect.y() + y0, x1 - x0, y1 - y0))
+            p.drawRect(
+                QtCore.QRect(left_rect.x() + x0, left_rect.y() + y0, x1 - x0, y1 - y0)
+            )
+            p.drawRect(
+                QtCore.QRect(right_rect.x() + x0, right_rect.y() + y0, x1 - x0, y1 - y0)
+            )
 
         p.end()

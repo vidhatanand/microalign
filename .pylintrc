@@ -1,0 +1,52 @@
+[MASTER]
+# Add PyQt5 to extension packages to avoid C-extension warnings
+extension-pkg-allow-list=PyQt5.QtCore,PyQt5.QtGui,PyQt5.QtWidgets
+
+# Disable some warnings that are not critical for this project
+disable=
+    C0103,  # invalid-name (PyQt methods follow Qt naming conventions)
+    I1101,  # c-extension-no-member (PyQt5 false positives)
+    W0212,  # protected-access (PyQt internal access)
+    C0301,  # line-too-long (handled by formatter)
+    W0108,  # unnecessary-lambda (common in PyQt signal connections)
+    W0107,  # unnecessary-pass (placeholder implementations)
+    C0415,  # import-outside-toplevel (PyQt imports in functions)
+    E1121,  # too-many-function-args (false positives with PyQt)
+    W0718,  # General exception
+
+# Enable useful warnings
+enable=
+    W0613,  # unused-argument
+    W0611,  # unused-import
+    W0612,  # unused-variable
+
+[MESSAGES CONTROL]
+# Suppress specific messages
+disable=
+    missing-docstring,  # We have docstrings now
+    invalid-name,       # PyQt naming conventions
+    c-extension-no-member,  # PyQt5 false positives
+    protected-access,   # PyQt internal access
+    line-too-long,      # Handled by formatter
+    unnecessary-lambda,  # Common in PyQt signal connections
+    unnecessary-pass,   # Placeholder implementations
+    import-outside-toplevel,  # PyQt imports in functions
+    too-many-function-args  # False positives with PyQt
+
+[FORMAT]
+# Maximum line length
+max-line-length=120
+
+[BASIC]
+# Good variable names
+good-names=i,j,k,ex,Run,_,id,ds,pw,ph,tw,th,sx,sy,vz,ox,oy
+
+# Bad variable names
+bad-names=foo,bar,baz,toto,tutu,tata
+
+[DESIGN]
+# Maximum number of arguments for function / method
+max-args=10
+
+# Maximum number of attributes for a class
+max-attributes=30

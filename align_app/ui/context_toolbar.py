@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PyQt5 import QtWidgets  # type: ignore
+from PyQt5 import QtCore, QtWidgets  # type: ignore
 
 from .context_panels.move import build as build_move_panel
 from .context_panels.rotate import build as build_rotate_panel
@@ -36,13 +36,13 @@ def build_context_toolbar(mw) -> None:
     add_tab("crop", "Crop")
     add_tab("overlay", "Overlay")
 
-    # separator right after tabs
+    # Separator after tabs
     tb.addSeparator()
 
-    # ---- Stacked controls (expands) ----
+    # ---- Stacked controls ----
     mw.ctx_stack = QtWidgets.QStackedWidget()
     mw.ctx_stack.setSizePolicy(
-        QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed
+        QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Preferred
     )
 
     mw.ctx_builders = {
@@ -61,11 +61,14 @@ def build_context_toolbar(mw) -> None:
         mw.ctx_index[name] = i
 
     host = QtWidgets.QWidget()
+    host.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Preferred)
     hlay = QtWidgets.QHBoxLayout(host)
     hlay.setContentsMargins(0, 0, 0, 0)
     hlay.setSpacing(0)
-    # make the stacked panel consume all horizontal space
-    hlay.addWidget(mw.ctx_stack, 1)
+    hlay.setAlignment(QtCore.Qt.AlignLeft)
+    hlay.addWidget(mw.ctx_stack)
+    # stretch makes the stack occupy all remaining width; each panel's right group will align at the far right
+    hlay.addStretch(1)
 
     stack_action = QtWidgets.QWidgetAction(mw)
     stack_action.setDefaultWidget(host)

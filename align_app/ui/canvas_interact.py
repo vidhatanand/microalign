@@ -11,6 +11,7 @@ class CanvasInteractMixin:
         # attrs provided by CanvasViewMixin; ensure they exist for linters
         self.view_pan_xp = getattr(self, "view_pan_xp", 0.0)  # type: ignore[attr-defined]
         self.view_pan_yp = getattr(self, "view_pan_yp", 0.0)  # type: ignore[attr-defined]
+        self.scale_draw = getattr(self, "scale_draw", 1.0)  # type: ignore[attr-defined]
         # Perspective drag state
         self._persp_dragging: bool = False
         self._persp_last: QtCore.QPoint | None = None
@@ -28,7 +29,7 @@ class CanvasInteractMixin:
     def mouseMoveEvent(self, evt: QtGui.QMouseEvent) -> None:  # noqa: N802
         pos = evt.pos()
 
-        # View panning (hand tool)
+        # View panning (hand tool) — convert draw px -> preview px with scale_draw
         if (
             self.pan_mode
             and not self.crop_mode
@@ -37,8 +38,9 @@ class CanvasInteractMixin:
         ):
             dx = pos.x() - self._pan_last.x()
             dy = pos.y() - self._pan_last.y()
-            self.view_pan_xp -= dx / (self.ds if self.ds else 1.0)
-            self.view_pan_yp -= dy / (self.ds if self.ds else 1.0)
+            sd = self.scale_draw if self.scale_draw else 1.0
+            self.view_pan_xp -= dx / sd
+            self.view_pan_yp -= dy / sd
             self._pan_last = pos
             self.update()
 
@@ -48,10 +50,9 @@ class CanvasInteractMixin:
             and self._persp_dragging
             and self._persp_last is not None
         ):
-            dx_draw = pos.x() - self._persp_last.x()
-            dy_draw = pos.y() - self._persp_last.y()
-            dx_prev = dx_draw / self.ds if self.ds else 0.0
-            dy_prev = dy_draw / self.ds if self.ds else 0.0
+            sd = self.scale_draw if self.scale_draw else 1.0
+            dx_prev = (pos.x() - self._persp_last.x()) / sd
+            dy_prev = (pos.y() - self._persp_last.y()) / sd
             path = self.current_path()
             if path:
                 if self._persp_last == self._persp_start_point:
@@ -67,9 +68,16 @@ class CanvasInteractMixin:
             self.update()
             return
 
-        # Hover cell (base panel only)
+        # Hover cell (base frame only) — compute in draw px inside the frame
         if self.left_rect.contains(pos):
-            step_draw = max(1, int(round(self.grid_step * self.ds)))
+            step_draw = max(
+                1,
+                int(
+                    round(
+                        self.grid_step * (self.scale_draw if self.scale_draw else 1.0)
+                    )
+                ),
+            )
             px = pos.x() - self.left_rect.x()
             py = pos.y() - self.left_rect.y()
             gx0 = (px // step_draw) * step_draw
@@ -80,7 +88,7 @@ class CanvasInteractMixin:
         else:
             self.hover_cell = None
 
-        # Affine drag pan on right when hand tool is OFF
+        # Affine drag pan on right when hand tool is OFF (and not in persp edit)
         if (
             self.dragging
             and self.drag_last is not None
@@ -89,10 +97,9 @@ class CanvasInteractMixin:
             and not self._is_persp_editing()
             and not self.pan_mode
         ):
-            dx_draw = pos.x() - self.drag_last.x()
-            dy_draw = pos.y() - self.drag_last.y()
-            dx_prev = dx_draw / self.ds if self.ds else 0.0
-            dy_prev = dy_draw / self.ds if self.ds else 0.0
+            sd = self.scale_draw if self.scale_draw else 1.0
+            dx_prev = (pos.x() - self.drag_last.x()) / sd
+            dy_prev = (pos.y() - self.drag_last.y()) / sd
             path = self.current_path()
             if path:
                 if self.drag_last == self._drag_start_point:
@@ -103,7 +110,7 @@ class CanvasInteractMixin:
             self.drag_last = pos
             self.update()
 
-        # Crop rubber band
+        # Crop rubber band (constrained to left frame)
         if self.crop_mode and self.crop_origin is not None:
             rect = QtCore.QRect(self.crop_origin, pos).normalized()
             rect = rect.intersected(self.left_rect)
@@ -155,9 +162,10 @@ class CanvasInteractMixin:
                 my = pos.y() - self.right_rect.y()
                 best_i = None
                 best_d2 = None
+                sd = self.scale_draw if self.scale_draw else 1.0
                 for i, (qx, qy) in enumerate(quad):
-                    dx = mx - qx * self.ds
-                    dy = my - qy * self.ds
+                    dx = mx - qx * sd
+                    dy = my - qy * sd
                     d2 = dx * dx + dy * dy
                     if best_d2 is None or d2 < best_d2:
                         best_d2 = d2
@@ -171,7 +179,7 @@ class CanvasInteractMixin:
                     self.setCursor(QtCore.Qt.ClosedHandCursor)
                     return
 
-        # Begin crop on left
+        # Begin crop on left (inside left frame)
         if (
             evt.button() == QtCore.Qt.LeftButton
             and self.crop_mode
@@ -236,11 +244,9 @@ class CanvasInteractMixin:
             return
 
         if key == QtCore.Qt.Key_P:
-            # Toggle editing state (warp persists either way)
             cur = getattr(
                 self, "perspective_editing", getattr(self, "perspective_mode", False)
             )
-            # Direct call avoids Pylint E1102 (not-callable) on a local alias
             self.set_perspective_editing(not cur)  # type: ignore[attr-defined]
             return
 

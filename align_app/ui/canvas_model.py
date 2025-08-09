@@ -57,7 +57,9 @@ class CanvasModelMixin:
         self._hist_idx: Dict[Path, int] = {}
 
         # Mode flags
-        self.perspective_mode = False
+        # 'perspective_mode' remains for legacy; we'll use '_persp_editing' as the truth.
+        self.perspective_mode: bool = False  # legacy name
+        self._persp_editing: bool = False  # true = drawing handles / editing
         self.active_corner = 0  # 0..3 when perspective is active
 
         # UI state
@@ -246,7 +248,7 @@ class CanvasModelMixin:
             self.idx -= 1
             self.update()
 
-    # ---- perspective / affine helpers ----
+    # ---- perspective helpers ----
     def _is_default_quad(self, quad) -> bool:
         default = [
             (0.0, 0.0),
@@ -262,17 +264,42 @@ class CanvasModelMixin:
                 return False
         return True
 
+    def has_perspective(self) -> bool:
+        """True if current image has a non-default perspective quad."""
+        path = self.current_path()
+        if not path:
+            return False
+        p = self.params.get(path, {})
+        if "persp" not in p:
+            return False
+        try:
+            quad = p["persp"]  # type: ignore[index]
+            return not self._is_default_quad(quad)
+        except Exception:
+            return False
+
+    # ---- editing/legacy toggles ----
     def set_perspective_mode(self, enabled: bool) -> None:
-        enabled = bool(enabled)
-        if self.perspective_mode == enabled:
+        """Legacy entry point; now maps to 'editing' (handles visibility)."""
+        self.set_perspective_editing(bool(enabled))
+
+    def set_perspective_editing(self, editing: bool) -> None:
+        """Enable/disable perspective *editing* (handles); warp persists regardless."""
+        editing = bool(editing)
+        if self._persp_editing == editing:
             return
-        self.perspective_mode = enabled
-        if enabled:
+        self._persp_editing = editing
+        # keep legacy flag in sync for any old code
+        self.perspective_mode = editing
+
+        if editing:
             path = self.current_path()
             if path:
                 p = self.params[path]
+                # make sure a quad exists
                 ensure_perspective_quad(p, self.pw, self.ph)
                 quad = p["persp"]  # type: ignore[index]
+                # seed from current affine if still default-ish
                 if self._is_default_quad(quad):
                     mov_prev = self._get_preview(path)
                     m_small = affine_params_to_small(mov_prev, p)
@@ -282,7 +309,8 @@ class CanvasModelMixin:
                     ).reshape(-1, 1, 2)
                     tc = cv2.transform(corners, m_small).reshape(-1, 2)
                     p["persp"] = [(float(x), float(y)) for (x, y) in tc]
-        self._on_mode_changed(self.perspective_mode)
+
+        self._on_mode_changed(self._persp_editing)
         self.update()
 
     def set_active_corner(self, idx: int) -> None:
@@ -292,8 +320,9 @@ class CanvasModelMixin:
             self._on_active_corner_changed(self.active_corner)
             self.update()
 
+    # ---- affine ops (disabled only while actively editing) ----
     def move_dxdy(self, dx: float, dy: float) -> None:
-        if not self.have_files() or self.perspective_mode:
+        if not self.have_files() or self._persp_editing:
             return
         path = self.current_path()
         if not path:
@@ -305,7 +334,7 @@ class CanvasModelMixin:
         self.update()
 
     def rotate_deg(self, dtheta: float) -> None:
-        if not self.have_files() or self.perspective_mode:
+        if not self.have_files() or self._persp_editing:
             return
         path = self.current_path()
         if not path:
@@ -316,7 +345,7 @@ class CanvasModelMixin:
         self.update()
 
     def zoom_factor(self, factor: float) -> None:
-        if not self.have_files() or self.perspective_mode:
+        if not self.have_files() or self._persp_editing:
             return
         path = self.current_path()
         if not path:
@@ -354,7 +383,7 @@ class CanvasModelMixin:
         img_full = load_image_bgr(str(path))
         bw, bh = self.base_full.shape[1], self.base_full.shape[0]
 
-        if self.perspective_mode:
+        if self.has_perspective():
             p = self.params[path]
             ensure_perspective_quad(p, self.pw, self.ph)
             out = perspective_warp_full(

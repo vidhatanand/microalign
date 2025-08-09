@@ -1,14 +1,14 @@
 from __future__ import annotations
 
-from PyQt5 import QtWidgets  # type: ignore
+from PyQt5 import QtCore, QtWidgets  # type: ignore
 
-from .common import row_container, gear_button
+from .common import row_container, gear_button, label, right_group
 
 
 def build(mw) -> QtWidgets.QWidget:
     w = row_container(mw.toolbar_bottom.font())
     lay = w.layout()
-    lay.addWidget(QtWidgets.QLabel("Zoom (image):"))
+    lay.addWidget(label("Zoom", w.font()))
 
     z1 = QtWidgets.QToolButton()
     z1.setText("Zoom−")
@@ -31,6 +31,17 @@ def build(mw) -> QtWidgets.QWidget:
     lay.addWidget(mz2)
 
     lay.addStretch(1)
+
+    rg = right_group(w)
+    rg_lay = rg.layout()
+    info = QtWidgets.QLabel("")
+    info.setAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
+    rg_lay.addWidget(info)
+
+    def refresh_info() -> None:
+        z = mw.canvas.scale_step * 100.0
+        mz = mw.canvas.micro_scale_step * 100.0
+        info.setText(f"Step ±{z:.2f}% | µ {mz:.2f}%")
 
     def open_settings() -> None:
         dlg = QtWidgets.QDialog(mw)
@@ -62,7 +73,10 @@ def build(mw) -> QtWidgets.QWidget:
         if dlg.exec_() == QtWidgets.QDialog.Accepted:
             mw.canvas.scale_step = float(zs.value())
             mw.canvas.micro_scale_step = float(mzs.value())
-            mw._update_ctx_info()  # type: ignore[attr-defined]
+            refresh_info()
 
-    lay.addWidget(gear_button(mw, open_settings))
+    rg_lay.addWidget(gear_button(mw, open_settings))
+    lay.addWidget(rg)
+
+    refresh_info()
     return w

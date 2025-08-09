@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from PyQt5 import QtWidgets  # type: ignore
+from PyQt5 import QtCore, QtWidgets  # type: ignore
 
-from .common import row_container, gear_button, ensure_attr
+from .common import row_container, gear_button, ensure_attr, label, right_group
 
 
 def build(mw) -> QtWidgets.QWidget:
@@ -12,26 +12,24 @@ def build(mw) -> QtWidgets.QWidget:
 
     w = row_container(mw.toolbar_bottom.font())
     lay = w.layout()
-    lay.addWidget(QtWidgets.QLabel("Move:"))
+    lay.addWidget(label("Move", w.font()))
 
-    def add_move_btn(label: str, dx: int, dy: int, mult: float) -> None:
+    def add_move_btn(txt: str, dx: int, dy: int, mult: float) -> None:
         btn = QtWidgets.QToolButton()
-        btn.setText(label)
+        btn.setText(txt)
         btn.clicked.connect(
             lambda: canvas.move_dxdy(dx * canvas.step * mult, dy * canvas.step * mult)
         )
         lay.addWidget(btn)
 
-    # normal step
     add_move_btn("←", -1, 0, 1.0)
     add_move_btn("→", +1, 0, 1.0)
     add_move_btn("↑", 0, -1, 1.0)
     add_move_btn("↓", 0, +1, 1.0)
 
-    # micro step
-    def add_micro_btn(label: str, dx: int, dy: int) -> None:
+    def add_micro_btn(txt: str, dx: int, dy: int) -> None:
         btn = QtWidgets.QToolButton()
-        btn.setText(label)
+        btn.setText(txt)
         btn.clicked.connect(
             lambda: canvas.move_dxdy(dx * canvas.micro_step, dy * canvas.micro_step)
         )
@@ -43,6 +41,16 @@ def build(mw) -> QtWidgets.QWidget:
     add_micro_btn("µ↓", 0, +1)
 
     lay.addStretch(1)
+
+    # 👉 right-aligned info group (label is right-aligned too)
+    rg = right_group(w)
+    rg_lay = rg.layout()
+    info = QtWidgets.QLabel("")
+    info.setAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
+    rg_lay.addWidget(info)
+
+    def refresh_info() -> None:
+        info.setText(f"Step {canvas.step:.1f}px | µ {canvas.micro_step:.2f}px")
 
     def open_settings() -> None:
         dlg = QtWidgets.QDialog(mw)
@@ -74,7 +82,10 @@ def build(mw) -> QtWidgets.QWidget:
         if dlg.exec_() == QtWidgets.QDialog.Accepted:
             canvas.step = float(step.value())
             canvas.micro_step = float(micro.value())
-            mw._update_ctx_info()  # type: ignore[attr-defined]
+            refresh_info()
 
-    lay.addWidget(gear_button(mw, open_settings))
+    rg_lay.addWidget(gear_button(mw, open_settings))
+    lay.addWidget(rg)
+
+    refresh_info()
     return w

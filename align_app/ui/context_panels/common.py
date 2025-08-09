@@ -13,8 +13,23 @@ def row_container(font) -> QtWidgets.QWidget:
     return w
 
 
+def label(txt: str, font) -> QtWidgets.QLabel:
+    lab = QtWidgets.QLabel(txt)
+    lab.setFont(font)  # same size as buttons
+    return lab
+
+
+def right_group(parent) -> QtWidgets.QWidget:
+    """A right-aligned container for info text + gear."""
+    host = QtWidgets.QWidget(parent)
+    lay = QtWidgets.QHBoxLayout(host)
+    lay.setContentsMargins(0, 0, 0, 0)
+    lay.setSpacing(6)
+    lay.setAlignment(QtCore.Qt.AlignRight)
+    return host
+
+
 def gear_button(parent, on_click) -> QtWidgets.QToolButton:
-    """Tiny 'settings' button for each panel."""
     btn = QtWidgets.QToolButton(parent)
     btn.setText("⚙")
     btn.setToolTip("Settings")

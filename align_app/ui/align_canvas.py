@@ -9,6 +9,7 @@ from __future__ import annotations
 from PyQt5 import QtCore  # type: ignore
 
 from .canvas_widget import CanvasWidget
+from .canvas_model import CanvasModelMixin
 
 
 class AlignCanvas(CanvasWidget):
@@ -36,3 +37,17 @@ class AlignCanvas(CanvasWidget):
     def reset_current_image(self) -> None:
         """Old name; calls the mixin reset method."""
         self.reset_current()
+
+    # --- New: editing-only toggle so perspective warp persists while not editing ---
+    def set_perspective_editing(self, editing: bool) -> None:
+        """Expose editing toggle to the toolbar; warp remains applied regardless.
+
+        Call the mixin implementation directly to keep linters happy.
+        """
+        try:
+            # Preferred in this codebase
+            CanvasModelMixin.set_perspective_editing(self, bool(editing))  # type: ignore[attr-defined]
+        except AttributeError:
+            # Fallback for older builds where only the legacy method exists
+            CanvasModelMixin.set_perspective_mode(self, bool(editing))  # type: ignore[attr-defined]
+        self.update()

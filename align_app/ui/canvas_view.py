@@ -15,8 +15,9 @@ class CanvasViewMixin:
     """Painting, draw scale, view zoom/pan, and grid overlay."""
 
     def _init_view(self) -> None:
-        # Draw scale (fitting) + user view zoom (collective)
-        self.ds: float = 1.0
+        # Draw scale (fitting) + user view zoom (applied to images only)
+        self.ds: float = 1.0  # fit-to-window scale for frames/hit-testing
+        self.iz: float = 1.0  # image-only zoom multiplier
         self.view_zoom: float = 1.0
         self.tw: int = 0
         self.th: int = 0
@@ -41,9 +42,10 @@ class CanvasViewMixin:
         self.drag_last: Optional[QtCore.QPoint] = None
 
     def _compute_draw_scale(self) -> None:
-        """Compute ds, tw, th so both panels fit plus user zoom."""
+        """Compute ds (fit), tw, th for frames; iz from view_zoom for image scaling."""
         if not self.have_base():
             self.ds = 1.0
+            self.iz = 1.0
             self.tw = self.th = 0
             return
         avail_w = max(1, self.width())
@@ -53,8 +55,9 @@ class CanvasViewMixin:
         sx = avail_w / float(need_w)
         sy = avail_h / float(need_h)
         base_fit = min(sx, sy, 1.0)
-        vz = clamp(self.view_zoom, 0.25, 5.0)
-        self.ds = base_fit * vz
+
+        self.iz = clamp(self.view_zoom, 0.25, 5.0)  # image-only zoom
+        self.ds = base_fit  # frame scale
         self.tw = int(round(self.pw * self.ds))
         self.th = int(round(self.ph * self.ds))
 
@@ -100,22 +103,29 @@ class CanvasViewMixin:
             )
         left_img = QtGui.QPixmap.fromImage(bgr_to_qimage(left_bgr))
 
-        # Right (moving)
+        # Right (moving) – compose first, then resize to frame size (ds), then scale by iz when drawing
         right_img = None
         if self.have_files():
             path = self.current_path()
             mov_prev = self._get_preview(path) if path else None
             if mov_prev is not None:
                 params = self.params[path]  # type: ignore[index]
-                if self.perspective_mode:
+                use_persp = False
+                if "persp" in params:
                     ensure_perspective_quad(params, self.pw, self.ph)
+                    use_persp = not self._is_default_quad(params["persp"])  # type: ignore[index]
+
+                if use_persp:
                     right_bgr = perspective_compose_preview(
                         base_prev=self.base_prev,
                         mov_prev=mov_prev,
                         dest_quad=params["persp"],  # type: ignore[index]
                         overlay=self.overlay_mode,
                         alpha=self.alpha,
-                        outline=self.show_outline,
+                        # Outline/handles only while editing:
+                        outline=(
+                            self.show_outline and getattr(self, "_persp_editing", False)
+                        ),
                     )
                 else:
                     m_small = affine_params_to_small(mov_prev, params)  # type: ignore[arg-type]
@@ -133,28 +143,39 @@ class CanvasViewMixin:
                     )
                 right_img = QtGui.QPixmap.fromImage(bgr_to_qimage(right_bgr))
 
-        # Panel rects (apply pan offset)
+        # Panel rects (apply pan offset) – frames are sized by ds only (iz affects images only)
         gap = 8
         left_rect = QtCore.QRect(-ox, -oy, self.tw, self.th)
         right_rect = QtCore.QRect(self.tw + gap - ox, -oy, self.tw, self.th)
         self.left_rect = left_rect
         self.right_rect = right_rect
 
-        p.drawPixmap(left_rect, left_img)
+        # Draw images with image-only zoom anchored at panel top-left; clip to frames
+        p.save()
+        p.setClipRect(left_rect)
+        p.translate(left_rect.topLeft())
+        p.scale(self.iz, self.iz)
+        p.drawPixmap(0, 0, left_img)
+        p.restore()
+
         if right_img is not None:
-            p.drawPixmap(right_rect, right_img)
+            p.save()
+            p.setClipRect(right_rect)
+            p.translate(right_rect.topLeft())
+            p.scale(self.iz, self.iz)
+            p.drawPixmap(0, 0, right_img)
+            p.restore()
         else:
             p.fillRect(right_rect, QtGui.QColor(40, 40, 40))
             p.setPen(QtGui.QColor(200, 200, 200))
             p.drawText(right_rect, QtCore.Qt.AlignCenter, "Pick a Source directory")
 
-        # Grid
+        # Grid (drawn over frames; locked to content/pan)
         if self.grid_on:
             step_draw = max(1, int(round(self.grid_step * self.ds)))
             pen = QtGui.QPen(QtGui.QColor(128, 128, 128), 1, QtCore.Qt.SolidLine)
             p.setPen(pen)
 
-            # lock grid to content (so it pans with images)
             def draw_grid(rect: QtCore.QRect) -> None:
                 phase_x = (-rect.x()) % step_draw
                 phase_y = (-rect.y()) % step_draw

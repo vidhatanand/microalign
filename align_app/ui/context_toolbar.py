@@ -36,6 +36,9 @@ def build_context_toolbar(mw) -> None:
     add_tab("crop", "Crop")
     add_tab("overlay", "Overlay")
 
+    # 👉 requested separator after tabs
+    tb.addSeparator()
+
     # ---- Stacked controls (left-aligned) ----
     mw.ctx_stack = QtWidgets.QStackedWidget()
     mw.ctx_builders = {
@@ -64,44 +67,6 @@ def build_context_toolbar(mw) -> None:
     stack_action.setDefaultWidget(host)
     tb.addAction(stack_action)
 
-    # ---- Info label ----
-    tb.addSeparator()
-    mw.ctx_info = QtWidgets.QLabel("")
-    mw.ctx_info.setAlignment(QtCore.Qt.AlignVCenter | QtCore.Qt.AlignRight)
-    mw.ctx_info.setMinimumWidth(240)
-    mw.ctx_info.setFont(tb.font())
-    tb.addWidget(mw.ctx_info)
-
-    # Provide a helper so panels can refresh the info label after settings change.
-    def _update_ctx_info() -> None:
-        name = mw._current_ctx or "move"
-        if name == "move":
-            step = getattr(mw.canvas, "step", 1.0)
-            micro = getattr(mw.canvas, "micro_step", max(0.05, step / 4.0))
-            mw.ctx_info.setText(f"Move step: {step:.1f}px (µ {micro:.2f}px)")
-        elif name == "rotate":
-            r = getattr(mw.canvas, "rot_step", 0.25)
-            mr = getattr(mw.canvas, "micro_rot_step", max(0.001, r / 4.0))
-            mw.ctx_info.setText(f"Rotate step: {r:.2f}° (µ {mr:.3f}°)")
-        elif name == "zoom":
-            z = getattr(mw.canvas, "scale_step", 0.01) * 100.0
-            mz = getattr(mw.canvas, "micro_scale_step", 0.005) * 100.0
-            mw.ctx_info.setText(f"Zoom step: ±{z:.2f}% (µ {mz:.2f}%)")
-        elif name == "perspective":
-            p = getattr(mw.canvas, "persp_step", 1.0)
-            mw.ctx_info.setText(f"Corner step: {p:.1f}px")
-        elif name == "grid":
-            g = getattr(mw.canvas, "grid_step", 20)
-            mw.ctx_info.setText(f"Grid step: {g}px")
-        elif name == "crop":
-            mw.ctx_info.setText("Drag on Base to crop")
-        elif name == "overlay":
-            onoff = "On" if getattr(mw.canvas, "overlay_mode", False) else "Off"
-            alpha = getattr(mw.canvas, "alpha", 0.5)
-            mw.ctx_info.setText(f"Alpha: {alpha:.2f}  (Overlay {onoff})")
-
-    mw._update_ctx_info = _update_ctx_info  # type: ignore[attr-defined]
-
     # Default
     mw._current_ctx = None
     mw.ctx_actions["move"].setChecked(True)
@@ -111,6 +76,13 @@ def build_context_toolbar(mw) -> None:
 def _set_context(mw, name: str) -> None:
     mw._current_ctx = name
     mw.ctx_stack.setCurrentIndex(mw.ctx_index.get(name, 0))
-    mw.canvas.set_perspective_mode(name == "perspective")
-    # refresh info using the helper panels also use
-    mw._update_ctx_info()  # type: ignore[attr-defined]
+
+    # 👉 editing-only: keep warp applied even when not editing
+    set_edit = getattr(mw.canvas, "set_perspective_editing", None)
+    if callable(set_edit):
+        set_edit(name == "perspective")
+    else:
+        # fallback for older canvases
+        set_mode = getattr(mw.canvas, "set_perspective_mode", None)
+        if callable(set_mode):
+            set_mode(name == "perspective")

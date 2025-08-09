@@ -2,12 +2,14 @@ from __future__ import annotations
 
 from PyQt5 import QtCore, QtWidgets  # type: ignore
 
-from .common import row_container
+from .common import row_container, label
 
 
 def build(mw) -> QtWidgets.QWidget:
     w = row_container(mw.toolbar_bottom.font())
     lay = w.layout()
+
+    lay.addWidget(label("Overlay", w.font()))
 
     cb_outline = QtWidgets.QCheckBox("Outline")
     cb_outline.setChecked(mw.canvas.show_outline)
@@ -20,8 +22,10 @@ def build(mw) -> QtWidgets.QWidget:
     cb_overlay.setChecked(mw.canvas.overlay_mode)
     lay.addWidget(cb_overlay)
 
-    alpha_row = row_container(mw.toolbar_bottom.font())
-    alpha_row.layout().addWidget(QtWidgets.QLabel("Alpha:"))
+    # consistent spacing between checkbox and slider
+    lay.addSpacing(12)
+
+    lay.addWidget(label("Alpha", w.font()))
     sld = QtWidgets.QSlider(QtCore.Qt.Horizontal)
     sld.setRange(0, 100)
     sld.setFixedWidth(160)
@@ -29,16 +33,10 @@ def build(mw) -> QtWidgets.QWidget:
     sld.valueChanged.connect(
         lambda v: (setattr(mw.canvas, "alpha", v / 100.0), mw.canvas.update())
     )
-    alpha_row.layout().addWidget(sld)
-    alpha_row.setVisible(bool(mw.canvas.overlay_mode))
-    mw._overlay_alpha_row = alpha_row
-    lay.addWidget(alpha_row)
+    lay.addWidget(sld)
 
+    # toggle visibility & repaint
     cb_overlay.toggled.connect(
-        lambda v: (
-            setattr(mw.canvas, "overlay_mode", bool(v)),
-            mw._overlay_alpha_row.setVisible(bool(v)),
-            mw.canvas.update(),
-        )
+        lambda v: (setattr(mw.canvas, "overlay_mode", bool(v)), mw.canvas.update())
     )
     return w

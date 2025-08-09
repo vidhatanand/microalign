@@ -38,9 +38,9 @@ def _overlay(base: np.ndarray, warped: np.ndarray, alpha: float) -> np.ndarray:
 def _outline(img: np.ndarray, quad: Quad) -> None:
     pts = np.array(quad, dtype=np.int32).reshape(-1, 1, 2)
     cv2.polylines(img, [pts], True, (0, 255, 255), 1, cv2.LINE_AA)
-    # handles
+    # bigger handles for easier grabbing
     for x, y in quad:
-        cv2.circle(img, (int(x), int(y)), 3, (255, 200, 0), -1, cv2.LINE_AA)
+        cv2.circle(img, (int(x), int(y)), 6, (255, 200, 0), -1, cv2.LINE_AA)
 
 
 def perspective_compose_preview(

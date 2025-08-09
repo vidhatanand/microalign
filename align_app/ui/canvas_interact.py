@@ -34,16 +34,18 @@ class CanvasInteractMixin:
             self._pan_last = pos
             self.update()
 
-        # Perspective drag (right panel)
+        # Perspective drag (right panel) – editing only
         if (
-            self.perspective_mode
+            getattr(self, "_persp_editing", False)
             and self._persp_dragging
             and self._persp_last is not None
         ):
             dx_draw = pos.x() - self._persp_last.x()
             dy_draw = pos.y() - self._persp_last.y()
-            dx_prev = dx_draw / self.ds if self.ds else 0.0
-            dy_prev = dy_draw / self.ds if self.ds else 0.0
+            # account for image-only zoom (iz)
+            scale = (self.ds if self.ds else 1.0) * (self.iz if self.iz else 1.0)
+            dx_prev = dx_draw / scale
+            dy_prev = dy_draw / scale
             path = self.current_path()
             if path:
                 if self._persp_last == self._persp_start_point:
@@ -72,19 +74,19 @@ class CanvasInteractMixin:
         else:
             self.hover_cell = None
 
-        # Affine drag pan on right when hand tool is OFF
+        # Affine drag pan on right when hand tool is OFF (disabled while editing perspective)
         if (
             self.dragging
             and self.drag_last is not None
             and self.have_files()
             and not self.crop_mode
-            and not self.perspective_mode
+            and not getattr(self, "_persp_editing", False)
             and not self.pan_mode
         ):
             dx_draw = pos.x() - self.drag_last.x()
             dy_draw = pos.y() - self.drag_last.y()
-            dx_prev = dx_draw / self.ds if self.ds else 0.0
-            dy_prev = dy_draw / self.ds if self.ds else 0.0
+            dx_prev = dx_draw / (self.ds if self.ds else 1.0)
+            dy_prev = dy_draw / (self.ds if self.ds else 1.0)
             path = self.current_path()
             if path:
                 if self.drag_last == self._drag_start_point:
@@ -123,7 +125,7 @@ class CanvasInteractMixin:
             and self.right_rect.contains(pos)
             and not self.crop_mode
             and self.have_files()
-            and not self.perspective_mode
+            and not getattr(self, "_persp_editing", False)
             and not self.pan_mode
         ):
             self.dragging = True
@@ -131,10 +133,10 @@ class CanvasInteractMixin:
             self._drag_start_point = pos
             self.setCursor(QtCore.Qt.ClosedHandCursor)
 
-        # Begin perspective drag on right (choose nearest corner)
+        # Begin perspective drag on right (choose nearest corner) – editing only
         if (
             evt.button() == QtCore.Qt.LeftButton
-            and self.perspective_mode
+            and getattr(self, "_persp_editing", False)
             and self.right_rect.contains(pos)
             and self.have_files()
         ):
@@ -147,15 +149,17 @@ class CanvasInteractMixin:
                 my = pos.y() - self.right_rect.y()
                 best_i = None
                 best_d2 = None
+                # account for image-only zoom when mapping preview->draw coords
+                scale = (self.ds if self.ds else 1.0) * (self.iz if self.iz else 1.0)
                 for i, (qx, qy) in enumerate(quad):
-                    dx = mx - qx * self.ds
-                    dy = my - qy * self.ds
+                    dx = mx - qx * scale
+                    dy = my - qy * scale
                     d2 = dx * dx + dy * dy
                     if best_d2 is None or d2 < best_d2:
                         best_d2 = d2
                         best_i = i
-                # 12px pick radius (in draw pixels)
-                if best_d2 is not None and best_d2 <= 12 * 12:
+                # wider pick radius (20px in draw pixels)
+                if best_d2 is not None and best_d2 <= 20 * 20:
                     self.set_active_corner(int(best_i))
                     self._persp_dragging = True
                     self._persp_last = pos
@@ -231,27 +235,14 @@ class CanvasInteractMixin:
             return
 
         if key == QtCore.Qt.Key_P:
-            self.set_perspective_mode(not self.perspective_mode)
+            self.set_perspective_editing(not getattr(self, "_persp_editing", False))
             return
 
         if key == QtCore.Qt.Key_C:
             self.start_crop_mode(None)
             return
 
-        # Corner select (1..4) while in perspective
-        if key in (QtCore.Qt.Key_1, QtCore.Qt.Key_2, QtCore.Qt.Key_3, QtCore.Qt.Key_4):
-            self.set_active_corner(
-                {
-                    QtCore.Qt.Key_1: 0,
-                    QtCore.Qt.Key_2: 1,
-                    QtCore.Qt.Key_3: 2,
-                    QtCore.Qt.Key_4: 3,
-                }[key]
-            )
-            self.update()
-            return
-
-        if not self.perspective_mode:
+        if not getattr(self, "_persp_editing", False):
             if key in (QtCore.Qt.Key_Left, QtCore.Qt.Key_A):
                 self.move_dxdy(-self.step, 0)
             elif key in (QtCore.Qt.Key_Right, QtCore.Qt.Key_D):

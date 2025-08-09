@@ -1,16 +1,15 @@
 from __future__ import annotations
 
-from PyQt5 import QtWidgets  # type: ignore
+from PyQt5 import QtCore, QtWidgets  # type: ignore
 
-from .common import row_container, gear_button
+from .common import row_container, gear_button, label, right_group
 
 
 def build(mw) -> QtWidgets.QWidget:
     w = row_container(mw.toolbar_bottom.font())
     lay = w.layout()
-    lay.addWidget(QtWidgets.QLabel("Corners:"))
+    lay.addWidget(label("Perspective", w.font()))
 
-    # Buttons are EXCLUSIVE via QButtonGroup
     group = QtWidgets.QButtonGroup(mw)
     group.setExclusive(True)
     mw._persp_btn_group = group
@@ -24,7 +23,6 @@ def build(mw) -> QtWidgets.QWidget:
         lay.addWidget(btn)
         mw._persp_btns.append(btn)
 
-    # sync from canvas -> toolbar
     def _sync_corner(idx: int) -> None:
         b = group.button(idx)
         if b and not b.isChecked():
@@ -33,14 +31,13 @@ def build(mw) -> QtWidgets.QWidget:
     mw.canvas.activeCornerChanged.connect(_sync_corner)
     _sync_corner(mw.canvas.active_corner)
 
-    # toolbar -> canvas
     group.idToggled.connect(
         lambda idx, checked: checked and mw.canvas.set_active_corner(idx)
     )
 
-    for label, dx, dy in [("←", -1, 0), ("→", +1, 0), ("↑", 0, -1), ("↓", 0, +1)]:
+    for txt, dx, dy in [("←", -1, 0), ("→", +1, 0), ("↑", 0, -1), ("↓", 0, +1)]:
         btn = QtWidgets.QToolButton()
-        btn.setText(label)
+        btn.setText(txt)
         btn.clicked.connect(
             lambda _=False, dx=dx, dy=dy: mw.canvas.nudge_corner(
                 dx * mw.canvas.persp_step, dy * mw.canvas.persp_step
@@ -49,6 +46,15 @@ def build(mw) -> QtWidgets.QWidget:
         lay.addWidget(btn)
 
     lay.addStretch(1)
+
+    rg = right_group(w)
+    rg_lay = rg.layout()
+    info = QtWidgets.QLabel("")
+    info.setAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
+    rg_lay.addWidget(info)
+
+    def refresh_info() -> None:
+        info.setText(f"Step {mw.canvas.persp_step:.1f}px")
 
     def open_settings() -> None:
         dlg = QtWidgets.QDialog(mw)
@@ -72,7 +78,10 @@ def build(mw) -> QtWidgets.QWidget:
 
         if dlg.exec_() == QtWidgets.QDialog.Accepted:
             mw.canvas.persp_step = float(ps.value())
-            mw._update_ctx_info()  # type: ignore[attr-defined]
+            refresh_info()
 
-    lay.addWidget(gear_button(mw, open_settings))
+    rg_lay.addWidget(gear_button(mw, open_settings))
+    lay.addWidget(rg)
+
+    refresh_info()
     return w

@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from PyQt5 import QtWidgets  # type: ignore
+from PyQt5 import QtCore, QtWidgets  # type: ignore
 
-from .common import row_container, gear_button, ensure_attr
+from .common import row_container, gear_button, ensure_attr, label, right_group
 
 
 def build(mw) -> QtWidgets.QWidget:
@@ -12,9 +12,8 @@ def build(mw) -> QtWidgets.QWidget:
 
     w = row_container(mw.toolbar_bottom.font())
     lay = w.layout()
-    lay.addWidget(QtWidgets.QLabel("Rotate:"))
+    lay.addWidget(label("Rotate", w.font()))
 
-    # normal rotation
     b1 = QtWidgets.QToolButton()
     b1.setText("Rot−")
     b1.clicked.connect(lambda: canvas.rotate_deg(-canvas.rot_step))
@@ -25,7 +24,6 @@ def build(mw) -> QtWidgets.QWidget:
     b2.clicked.connect(lambda: canvas.rotate_deg(+canvas.rot_step))
     lay.addWidget(b2)
 
-    # micro rotation
     mb1 = QtWidgets.QToolButton()
     mb1.setText("µRot−")
     mb1.clicked.connect(lambda: canvas.rotate_deg(-canvas.micro_rot_step))
@@ -37,6 +35,15 @@ def build(mw) -> QtWidgets.QWidget:
     lay.addWidget(mb2)
 
     lay.addStretch(1)
+
+    rg = right_group(w)
+    rg_lay = rg.layout()
+    info = QtWidgets.QLabel("")
+    info.setAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
+    rg_lay.addWidget(info)
+
+    def refresh_info() -> None:
+        info.setText(f"Step {canvas.rot_step:.2f}° | µ {canvas.micro_rot_step:.3f}°")
 
     def open_settings() -> None:
         dlg = QtWidgets.QDialog(mw)
@@ -70,7 +77,10 @@ def build(mw) -> QtWidgets.QWidget:
         if dlg.exec_() == QtWidgets.QDialog.Accepted:
             canvas.rot_step = float(rot.value())
             canvas.micro_rot_step = float(mrot.value())
-            mw._update_ctx_info()  # type: ignore[attr-defined]
+            refresh_info()
 
-    lay.addWidget(gear_button(mw, open_settings))
+    rg_lay.addWidget(gear_button(mw, open_settings))
+    lay.addWidget(rg)
+
+    refresh_info()
     return w
